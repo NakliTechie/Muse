@@ -122,6 +122,51 @@
   .look[aria-pressed="true"] {
     border-color: var(--accent); color: var(--accent); background: #d8c08a14;
   }
+  .look .thumb {
+    display: block; width: 72px; height: 54px; border-radius: 6px;
+    object-fit: cover; margin-bottom: 5px; background: #000;
+  }
+  .look.has-thumb { padding: 6px; border-radius: 9px; text-align: center; font-size: 11px; }
+
+  /* Drop-zone hero — shown until an image loads. Never a blank canvas (§4). */
+  .hero {
+    position: absolute; inset: var(--gap);
+    display: grid; place-items: center;
+    border: 2px dashed #ffffff26; border-radius: var(--radius);
+    background: #ffffff05; text-align: center; padding: 24px;
+    transition: border-color .15s, background .15s;
+  }
+  .hero.hidden { display: none; }
+  .hero.drag { border-color: var(--accent); background: #d8c08a12; }
+  .hero .h-inner { max-width: 420px; }
+  .hero h2 { margin: 0 0 6px; font-size: 20px; font-weight: 600; }
+  .hero p { margin: 0 0 18px; color: var(--muted); }
+  .hero .row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .btn.primary { border-color: var(--accent); color: var(--accent); background: #d8c08a12; }
+  .btn.primary:hover { background: #d8c08a20; }
+
+  /* Toasts — in-app only, never native alert()/confirm() (§4, handoff §12). */
+  .toasts {
+    position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+    z-index: 60; display: flex; flex-direction: column; gap: 8px; align-items: center;
+    pointer-events: none;
+  }
+  .toast {
+    background: var(--surface); color: var(--ink);
+    border: 1px solid #ffffff1f; border-left: 3px solid var(--accent);
+    border-radius: 8px; padding: 10px 14px; max-width: 90vw;
+    box-shadow: 0 8px 24px #000a; font-size: 13px;
+    animation: toast-in .18s ease-out;
+  }
+  .toast.err { border-left-color: var(--danger); }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) {
+    .toast { animation: none; } .hero { transition: none; }
+  }
+  .visually-hidden {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
 </style>
 </head>
 <body>
@@ -129,14 +174,32 @@
     <span class="brand">Muse<span class="dot">.</span></span>
     <span class="hint" id="tagline"></span>
     <span class="spacer"></span>
+    <button class="btn" id="open-image" type="button"></button>
     <button class="btn" id="reload-sample" type="button"></button>
+    <button class="btn" id="save-preset" type="button" hidden></button>
+    <button class="btn primary" id="export" type="button" hidden></button>
   </div>
 
   <nav class="lookstrip" id="lookstrip" aria-label="looks"></nav>
 
   <main class="stage">
     <canvas id="view" width="1024" height="768" aria-label="image preview"></canvas>
+
+    <!-- Drop-zone hero: shown until an image (or sample) is loaded. Never blank. -->
+    <div class="hero" id="hero">
+      <div class="h-inner">
+        <h2 id="hero-title"></h2>
+        <p id="hero-sub"></p>
+        <div class="row">
+          <button class="btn primary" id="hero-open" type="button"></button>
+          <button class="btn" id="hero-sample" type="button"></button>
+        </div>
+      </div>
+    </div>
   </main>
+
+  <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp" class="visually-hidden" aria-hidden="true" tabindex="-1">
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 
   <div class="footer">
     <span id="engine-status"></span>
@@ -165,7 +228,17 @@
 const LANG = {
   en: {
     tagline: "90s film looks, on-device.",
-    reloadSample: "New sample",
+    reloadSample: "Sample",
+    openImage: "Open image",
+    exportBtn: "Export",
+    savePreset: "Save preset",
+    heroTitle: "Drop a photo to muse it",
+    heroSub: "Your image never leaves this device — the whole edit runs in your browser. PNG, JPEG, or WebP.",
+    heroOpen: "Open image",
+    heroSample: "Try a sample",
+    toastUnreadable: "That file isn't a supported image. Accepted: PNG, JPEG, WebP.",
+    toastDownscaled: (mp) => `Large image (${mp}MP) — preview downscaled for speed; export uses full detail where memory allows.`,
+    toastDecodeFail: "Couldn't read that image — it may be corrupt.",
     lookLabel: "Look",
     // Proper nouns still route through the map so the i18n scaffold stays honest (§13).
     lookNames: {
@@ -1036,14 +1109,90 @@ function boot() {
   }
 
   let variant = 0;
+  let sourceImage = null;   // loaded user image (ImageBitmap/canvas); null → procedural sample
+  let sourceDirty = true;   // GPU source needs (re)upload before next render
+  let hasContent = false;   // something has been rendered → hero dismissed, editor live
+
   // Full-chain count: active GL passes + the trim compositor when enabled.
   const chainCount = () => engine.activeCount() + (RECIPE.params.trim.bypass ? 0 : 1);
+  const currentSource = () => sourceImage || makeSampleImage(1024, 768, variant);
+  // sourceDirty splits upload from re-render: param-only edits (sliders, looks)
+  // skip the re-upload, so dragging a slider on a big photo stays smooth.
   function draw() {
-    const img = makeSampleImage(1024, 768, variant);
-    engine.render(img);
+    if (sourceDirty) { engine.render(currentSource()); sourceDirty = false; }
+    else { engine.render(); }
     compositeTrim(canvas, view);
     $("engine-status").textContent = t("engineReady", chainCount());
   }
+
+  /* ---- In-app toasts (never native alert/confirm — handoff §12) ---- */
+  const toastHost = $("toasts");
+  function toast(msg, kind) {
+    const el = document.createElement("div");
+    el.className = "toast" + (kind === "err" ? " err" : "");
+    el.textContent = msg;
+    toastHost.appendChild(el);
+    setTimeout(() => {
+      el.style.transition = "opacity .3s"; el.style.opacity = "0";
+      setTimeout(() => el.remove(), 320);
+    }, kind === "err" ? 5200 : 4200);
+  }
+
+  /* ---- Source loading: hero → live editor ---- */
+  const hero = $("hero");
+  function revealEditor() {
+    hasContent = true;
+    hero.classList.add("hidden");
+    $("export").hidden = false;
+    $("save-preset").hidden = false;
+  }
+  function setSource(img) { sourceImage = img; sourceDirty = true; revealEditor(); draw(); }
+  function loadSample() { sourceImage = null; sourceDirty = true; revealEditor(); draw(); }
+
+  const MAX_MP = 24;   // >24MP → downscale for preview (handoff §4)
+  async function loadFile(file) {
+    if (!file) return;
+    if (!/^image\/(png|jpeg|webp)$/i.test(file.type)) { toast(t("toastUnreadable"), "err"); return; }
+    let bmp;
+    try {
+      bmp = await createImageBitmap(file, { imageOrientation: "from-image" });  // respect EXIF rotation
+    } catch (e) {
+      console.error("[muse] decode failed:", e); toast(t("toastDecodeFail"), "err"); return;
+    }
+    let img = bmp;
+    const mp = (bmp.width * bmp.height) / 1e6;
+    if (mp > MAX_MP) {
+      const s = Math.sqrt(MAX_MP / mp);
+      const cw = Math.max(1, Math.round(bmp.width * s)), ch = Math.max(1, Math.round(bmp.height * s));
+      const cv = document.createElement("canvas"); cv.width = cw; cv.height = ch;
+      cv.getContext("2d").drawImage(bmp, 0, 0, cw, ch);
+      img = cv;
+      toast(t("toastDownscaled", mp.toFixed(0)));
+    }
+    setSource(img);
+  }
+
+  // File picker + drag/drop. Window-level dragover/drop preventDefault stops the
+  // browser from navigating away when a photo lands outside the stage.
+  const fileInput = $("file-input");
+  fileInput.addEventListener("change", () => {
+    const f = fileInput.files && fileInput.files[0];
+    fileInput.value = "";                     // let the same file be re-picked
+    loadFile(f);
+  });
+  const pick = () => fileInput.click();
+  $("open-image").addEventListener("click", pick);
+  $("hero-open").addEventListener("click", pick);
+  $("hero-sample").addEventListener("click", loadSample);
+
+  const stage = document.querySelector(".stage");
+  const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+  stage.addEventListener("dragenter", (e) => { stop(e); hero.classList.add("drag"); });
+  stage.addEventListener("dragover", (e) => { stop(e); if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"; hero.classList.add("drag"); });
+  stage.addEventListener("dragleave", (e) => { stop(e); if (e.target === stage || e.target === hero) hero.classList.remove("drag"); });
+  stage.addEventListener("drop", (e) => { stop(e); hero.classList.remove("drag"); const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]; if (f) loadFile(f); });
+  window.addEventListener("dragover", (e) => e.preventDefault());
+  window.addEventListener("drop", (e) => e.preventDefault());
 
   // Look strip — one pill per look; active reflects RECIPE.look.
   const strip = $("lookstrip");
@@ -1072,22 +1221,38 @@ function boot() {
   }
 
   // State mutations funnel through these so the strip and canvas stay in sync —
-  // the same one mechanism the agent face (§8) will drive at M1.
-  function setLook(id) { RECIPE = makeRecipe(id); syncLookStrip(); draw(); }
-  function setRecipe(obj) { RECIPE = deserialiseRecipe(obj); syncLookStrip(); draw(); }
+  // the same one mechanism the agent face (§8) drives. Param-only changes don't
+  // re-upload the source (sourceDirty stays false). Draw is deferred until there's
+  // content, so choosing a look before loading an image doesn't paint behind the hero.
+  function setLook(id) { RECIPE = makeRecipe(id); syncLookStrip(); if (hasContent) draw(); }
+  function setRecipe(obj) { RECIPE = deserialiseRecipe(obj); syncLookStrip(); if (hasContent) draw(); }
   function getRecipe() { return JSON.parse(serialiseRecipe(RECIPE)); }
 
-  buildLookStrip();
-  draw();
+  // Static strings (all through the lang map — §13)
+  $("open-image").textContent = t("openImage");
+  $("export").textContent = t("exportBtn");
+  $("save-preset").textContent = t("savePreset");
+  $("hero-title").textContent = t("heroTitle");
+  $("hero-sub").textContent = t("heroSub");
+  $("hero-open").textContent = t("heroOpen");
+  $("hero-sample").textContent = t("heroSample");
 
-  $("reload-sample").addEventListener("click", () => { variant = (variant + 1) % 6; draw(); });
+  buildLookStrip();
+  $("engine-status").textContent = t("engineReady", chainCount());   // footer live before first draw
+
+  // Topbar "Sample" cycles the fixed fixture set and switches back to sample mode.
+  $("reload-sample").addEventListener("click", () => {
+    sourceImage = null; variant = (variant + 1) % 6; sourceDirty = true; revealEditor(); draw();
+  });
 
   // M0 harness / proto agent-face handle. The determinism verifier (A10) drives
-  // exactly these entry points — one pipeline, two doors (§8).
+  // exactly these entry points — one pipeline, two doors (§8). setVariant forces
+  // sample mode + a fresh upload so the gate's fixed image renders regardless of
+  // what's loaded interactively.
   window.__muse_m0 = {
     gl, engine, view, makeSampleImage,
     redraw: draw,
-    setVariant: (n) => { variant = ((n % 6) + 6) % 6; draw(); },
+    setVariant: (n) => { sourceImage = null; variant = ((n % 6) + 6) % 6; sourceDirty = true; hasContent = true; draw(); },
     getRecipe, setRecipe, setLook,
     serialiseRecipe, deserialiseRecipe, makeRecipe,
     LOOKS: LOOKS.map((l) => ({ id: l.id, name: l.name })),
@@ -1096,7 +1261,14 @@ function boot() {
     // what the M0 determinism page hashes.
     snapshot: () => view.getContext("2d").getImageData(0, 0, view.width, view.height).data,
   };
-  console.log("[muse] M0 harness up ·", chainCount(), "pass(es) · look:", RECIPE.look);
+
+  // Expose the loaders + draw for the M1 editor layers (sliders, presets, export)
+  // and the M1 self-test to drive. Kept separate from the frozen M0 face above.
+  boot.editor = { loadFile, loadSample, setSource, setLook, setRecipe, getRecipe, draw,
+                  toast, revealEditor, get hasContent() { return hasContent; },
+                  markDirty: () => { sourceDirty = true; }, chainCount, view };
+
+  console.log("[muse] editor up ·", chainCount(), "pass(es) · look:", RECIPE.look);
 }
 
 document.addEventListener("DOMContentLoaded", boot);
