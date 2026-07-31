@@ -12,7 +12,7 @@
 -->
 <meta http-equiv="Content-Security-Policy"
       content="default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'">
-<meta name="version" content="0.0.5-m0">
+<meta name="version" content="0.0.6-m0">
 <title>Muse</title>
 <style>
   :root {
@@ -174,7 +174,7 @@ const LANG = {
       mall: "Mall Studio",
     },
     engineReady: (n) => `WebGL2 ready · ${n} pass${n === 1 ? "" : "es"} in chain`,
-    version: "v0.0.5 · M0",
+    version: "v0.0.6 · M0",
     fatalTitle: "WebGL2 isn't available",
     fatalBody: "Muse renders every look with a single WebGL2 shader chain — there's no fallback path by design. Your browser or device didn't provide a WebGL2 context.",
     fatalList: [
@@ -192,7 +192,8 @@ const t = (k, ...a) => {
 
 /* ---- DOM ---- */
 const $ = (id) => document.getElementById(id);
-const canvas = $("view");
+const view = $("view");                            // visible output — trim compositor target
+const canvas = document.createElement("canvas");   // offscreen WebGL2 chain canvas
 
 /* ---- WebGL2 acquisition + capability gate ---- */
 function getGL() {
@@ -279,7 +280,7 @@ void main() {
  * is exactly what slope/offset/power express: offset lifts/crushes blacks,
  * slope tilts the cast, power bends midtones, sat mutes or pushes colour.
  * ========================================================================= */
-const VERSION_ID = "0.0.5-m0";
+const VERSION_ID = "0.0.6-m0";
 const DEFAULT_SEED = 1;
 
 /* Default params for the whole 8-pass chain. Only `curve` is active in A2;
@@ -293,7 +294,7 @@ function defaultParams() {
     halation:   { bypass: true,  threshold: 0.75, strength: 0, radius: 2, tint: [1, 0.6, 0.5] },
     grain:      { bypass: true,  amount: 0, size: 1 },
     leak:       { bypass: true,  strength: 0, hue: 0, angle: 0, width: 3 },
-    trim:       { bypass: true,  aspect: "none", border: 0, stamp: false },
+    trim:       { bypass: true,  aspect: "none", border: 0, stamp: false, matte: false },
   };
 }
 
@@ -310,13 +311,15 @@ const LOOKS = [
       aberration: { bypass: false, amount: 1.4 },
       flash: { bypass: false, strength: 0.35, radius: 0.5, softness: 0.25, vignette: 0.3 },
       halation: { bypass: false, threshold: 0.68, strength: 0.6, radius: 3, tint: [1, 0.42, 0.32] },
-      grain: { bypass: false, amount: 0.14, size: 2.5 } } },   // heavy, chunky
+      grain: { bypass: false, amount: 0.14, size: 2.5 },       // heavy, chunky
+      trim: { bypass: false, aspect: "4:3", border: 0, stamp: false, matte: false } } },
   { id: "corinne", name: "Corinne Day", params: {
       // grey cast, low contrast, cool daylight · no flash, no defocus, minimal
       // halation (§4: minimal ≠ none)
       curve: { slope: [0.90, 0.92, 0.95], offset: [0.06, 0.06, 0.07], power: [1.0, 1.0, 0.98], sat: 0.85 },
       halation: { bypass: false, threshold: 0.82, strength: 0.15, radius: 2, tint: [1, 0.85, 0.75] },
-      grain: { bypass: false, amount: 0.09, size: 1 } } },     // medium, fine
+      grain: { bypass: false, amount: 0.09, size: 1 },         // medium, fine
+      trim: { bypass: false, aspect: "3:2", border: 0, stamp: false, matte: false } } },
   { id: "disposable", name: "Disposable", params: {
       // warm, crushed shadows, oversaturated · plastic-lens edge blur + fringe ·
       // harsh full-frame flash, deep vignette
@@ -325,7 +328,8 @@ const LOOKS = [
       aberration: { bypass: false, amount: 2.4 },
       flash: { bypass: false, strength: 0.5, radius: 0.8, softness: 0.45, vignette: 0.55 },
       halation: { bypass: false, threshold: 0.75, strength: 0.35, radius: 2.5, tint: [1, 0.6, 0.5] },
-      grain: { bypass: false, amount: 0.13, size: 1.5 } } },   // heavy
+      grain: { bypass: false, amount: 0.13, size: 1.5 },       // heavy
+      trim: { bypass: false, aspect: "4:3", border: 0, stamp: true, matte: false } } },
   { id: "mall", name: "Mall Studio", params: {
       // warm, glowy, lifted everything · full soft-focus (uniform, part-blended) ·
       // soft omni flash
@@ -333,7 +337,8 @@ const LOOKS = [
       defocus: { bypass: false, radius: 3.2, radial: 0, blend: 0.6 },
       flash: { bypass: false, strength: 0.22, radius: 0.95, softness: 0.7, vignette: 0.12 },
       halation: { bypass: false, threshold: 0.55, strength: 0.55, radius: 4, tint: [1, 0.9, 0.8] },
-      grain: { bypass: false, amount: 0.05, size: 1 } } },     // light
+      grain: { bypass: false, amount: 0.05, size: 1 },         // light
+      trim: { bypass: false, aspect: "4:3", border: 0, stamp: false, matte: false } } },  // matte optional, off by default
 ];
 
 /* Deep-merge preset overrides onto defaults. Arrays (vec3s) replace wholesale —
@@ -725,6 +730,75 @@ const PASSES = [
   },
 ];
 
+/* =========================================================================
+ * Trim (pass 8) — Canvas2D compositor per §5: centre-crop to aspect, white
+ * border, date stamp, optional oval matte. Integer geometry throughout so
+ * composited pixels are deterministic; the visible canvas IS this
+ * compositor's output and the harness hashes it (getImageData), trim
+ * included. When trim is bypassed it's a 1:1 blit of the GL result.
+ * ========================================================================= */
+const ASPECTS = { "4:3": [4, 3], "3:2": [3, 2], "1:1": [1, 1] };
+
+/* Seven-segment date stamp drawn from rects, not fillText: no font
+   dependency, deterministic pixels, locale-independent (§13 — the date is a
+   prop, not a date). Classic orange quartz-back, fixed prop string. */
+const STAMP_TEXT = "'98 4 12";
+const STAMP_SEGS = { "0": "abcdef", "1": "bc", "2": "abged", "3": "abgcd", "4": "fbgc",
+                     "5": "afgcd", "6": "afgedc", "7": "abc", "8": "abcdefg", "9": "abfgcd" };
+function drawStamp(x, ix, iy, iw, ih) {
+  const u = Math.max(2, Math.round(Math.min(iw, ih) * 0.007));  // segment thickness
+  const dw = u * 4, dh = u * 7, hseg = Math.round((dh - 3 * u) / 2);
+  const widths = [...STAMP_TEXT].map((ch) => ch === " " ? Math.round(dw * 0.6) : ch === "'" ? Math.round(dw * 0.4) : dw);
+  const total = widths.reduce((a, w) => a + w + u, -u);
+  let px = ix + iw - total - u * 6;
+  const py = iy + ih - dh - u * 6;
+  x.fillStyle = "#ff9a2a";
+  for (let i = 0; i < STAMP_TEXT.length; i++) {
+    const ch = STAMP_TEXT[i];
+    if (ch === "'") {
+      x.fillRect(px, py, u, u * 2);
+    } else if (ch !== " ") {
+      for (const s of STAMP_SEGS[ch]) {
+        if (s === "a") x.fillRect(px + u, py, dw - 2 * u, u);
+        if (s === "g") x.fillRect(px + u, py + u + hseg, dw - 2 * u, u);
+        if (s === "d") x.fillRect(px + u, py + dh - u, dw - 2 * u, u);
+        if (s === "f") x.fillRect(px, py + u, u, hseg);
+        if (s === "b") x.fillRect(px + dw - u, py + u, u, hseg);
+        if (s === "e") x.fillRect(px, py + 2 * u + hseg, u, hseg);
+        if (s === "c") x.fillRect(px + dw - u, py + 2 * u + hseg, u, hseg);
+      }
+    }
+    px += widths[i] + u;
+  }
+}
+
+function drawMatte(x, W, H) {
+  x.fillStyle = "#efe9dc";
+  x.beginPath();
+  x.rect(0, 0, W, H);
+  x.ellipse(W / 2, H / 2, W * 0.44, H * 0.46, 0, 0, Math.PI * 2);
+  x.fill("evenodd");
+}
+
+function compositeTrim(glCanvas, out) {
+  const p = RECIPE.params.trim;
+  const gw = glCanvas.width, gh = glCanvas.height;
+  let sw = gw, sh = gh;
+  const asp = !p.bypass && ASPECTS[p.aspect];
+  if (asp) {
+    if (gw * asp[1] > gh * asp[0]) sw = Math.floor(gh * asp[0] / asp[1]);
+    else sh = Math.floor(gw * asp[1] / asp[0]);
+  }
+  const sx = Math.floor((gw - sw) / 2), sy = Math.floor((gh - sh) / 2);
+  const b = !p.bypass && p.border > 0 ? Math.round(Math.min(sw, sh) * p.border) : 0;
+  out.width = sw + 2 * b; out.height = sh + 2 * b;   // resizing also clears
+  const x = out.getContext("2d");
+  if (b) { x.fillStyle = "#f6f3ec"; x.fillRect(0, 0, out.width, out.height); }
+  x.drawImage(glCanvas, sx, sy, sw, sh, b, b, sw, sh);
+  if (!p.bypass && p.matte) drawMatte(x, out.width, out.height);
+  if (!p.bypass && p.stamp) drawStamp(x, b, b, sw, sh);
+}
+
 /* ---- Engine: compiles passes, manages ping-pong FBOs, renders the chain ---- */
 function makeEngine(gl) {
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); // we flip in-shader at the entry pass
@@ -960,10 +1034,13 @@ function boot() {
   }
 
   let variant = 0;
+  // Full-chain count: active GL passes + the trim compositor when enabled.
+  const chainCount = () => engine.activeCount() + (RECIPE.params.trim.bypass ? 0 : 1);
   function draw() {
     const img = makeSampleImage(1024, 768, variant);
     engine.render(img);
-    $("engine-status").textContent = t("engineReady", engine.activeCount());
+    compositeTrim(canvas, view);
+    $("engine-status").textContent = t("engineReady", chainCount());
   }
 
   // Look strip — one pill per look; active reflects RECIPE.look.
@@ -1006,15 +1083,18 @@ function boot() {
   // M0 harness / proto agent-face handle. The determinism verifier (A10) drives
   // exactly these entry points — one pipeline, two doors (§8).
   window.__muse_m0 = {
-    gl, engine, makeSampleImage,
+    gl, engine, view, makeSampleImage,
     redraw: draw,
     setVariant: (n) => { variant = ((n % 6) + 6) % 6; draw(); },
     getRecipe, setRecipe, setLook,
     serialiseRecipe, deserialiseRecipe, makeRecipe,
     LOOKS: LOOKS.map((l) => ({ id: l.id, name: l.name })),
-    snapshot: () => engine.snapshot(),
+    chainCount,
+    // Final output — the composited visible canvas, trim included. This is
+    // what the M0 determinism page hashes.
+    snapshot: () => view.getContext("2d").getImageData(0, 0, view.width, view.height).data,
   };
-  console.log("[muse] M0 harness up ·", engine.activeCount(), "pass(es) · look:", RECIPE.look);
+  console.log("[muse] M0 harness up ·", chainCount(), "pass(es) · look:", RECIPE.look);
 }
 
 document.addEventListener("DOMContentLoaded", boot);
