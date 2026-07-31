@@ -338,12 +338,6 @@
     <div class="drawer-body" id="drawer-body"></div>
   </aside>
 
-  <div class="footer">
-    <span id="engine-status"></span>
-    <span class="spacer"></span>
-    <span class="ver" id="ver"></span>
-  </div>
-
   <!-- WebGL2 capability gate: full-viewport, no dead sliders behind it -->
   <div class="fatal" id="fatal" role="alertdialog" aria-modal="true">
     <div class="card">
@@ -1739,13 +1733,16 @@ function boot() {
     const small = document.createElement("canvas"); small.width = tw; small.height = th;
     small.getContext("2d").drawImage(src, 0, 0, tw, th);
     const prev = RECIPE;
-    for (const b of strip.querySelectorAll(".look[data-look]")) {
-      RECIPE = makeRecipe(b.dataset.look);
-      engine.render(small); compositeTrim(canvas, view);
-      const img = b.querySelector("img.thumb");
-      if (img) { img.src = view.toDataURL("image/jpeg", 0.72); b.classList.add("has-thumb"); }
+    try {
+      for (const b of strip.querySelectorAll(".look[data-look]")) {
+        RECIPE = makeRecipe(b.dataset.look);
+        engine.render(small); compositeTrim(canvas, view);
+        const img = b.querySelector("img.thumb");
+        if (img) { img.src = view.toDataURL("image/jpeg", 0.72); b.classList.add("has-thumb"); }
+      }
+    } finally {
+      RECIPE = prev; sourceDirty = true; draw();   // restore even if a render throws
     }
-    RECIPE = prev; sourceDirty = true; draw();
   }
 
   /* ---- Slider panel (B3): fieldset per pass, per-pass bypass, tokenised ranges.
@@ -1986,11 +1983,13 @@ function boot() {
     if (opts.seed != null) rec.seed = opts.seed >>> 0;
     rec.via = "agent";
     const prev = RECIPE;                       // render off the current state, then restore
-    RECIPE = rec;
-    engine.render(img); compositeTrim(canvas, view);
-    const out = await renderToPNG(rec);
-    RECIPE = prev; sourceDirty = true; if (hasContent) draw();
-    return out;
+    try {
+      RECIPE = rec;
+      engine.render(img); compositeTrim(canvas, view);
+      return await renderToPNG(rec);
+    } finally {
+      RECIPE = prev; sourceDirty = true; if (hasContent) draw();   // restore even if encoding throws
+    }
   }
   async function agentExport(opts = {}) {
     if (!hasContent) throw new Error("muse.export: no image loaded");
