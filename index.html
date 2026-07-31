@@ -138,6 +138,7 @@
   }
   .look.has-thumb .thumb { display: block; }
   .look.has-thumb { padding: 6px; border-radius: 9px; text-align: center; font-size: 11px; line-height: 1.2; }
+  .look .era { display: block; font-size: 9px; color: var(--accent); opacity: .75; letter-spacing: .04em; margin-top: 1px; }
   .preset-wrap { display: inline-flex; align-items: stretch; }
   .preset-wrap .look { border-top-right-radius: 0; border-bottom-right-radius: 0; }
   .look-del {
@@ -435,10 +436,16 @@ const LANG = {
     // Proper nouns still route through the map so the i18n scaffold stays honest (§13).
     lookNames: {
       none: "Original",
+      daguerreotype: "Daguerreotype",
+      autochrome: "Autochrome",
+      kodachrome: "Kodachrome",
+      polaroid: "Polaroid",
       sorrenti: "Sorrenti",
       corinne: "Corinne Day",
       disposable: "Disposable",
       mall: "Mall Studio",
+      digicam: "Digicam",
+      phonecam: "Early Phone",
     },
     engineReady: (n) => `WebGL2 ready · ${n} pass${n === 1 ? "" : "es"} in chain`,
     version: "v0.1.0 · M1",
@@ -554,7 +561,8 @@ const DEFAULT_SEED = 1;
    the rest are present-but-bypassed placeholders their passes will fill in. */
 function defaultParams() {
   return {
-    curve:      { bypass: false, slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], sat: 1 },
+    curve:      { bypass: false, slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], sat: 1,
+                  tone: { lo: [0.16, 0.10, 0.06], hi: [0.98, 0.95, 0.86], amt: 0 } },
     defocus:    { bypass: true,  radius: 0, radial: 0, blend: 1 },
     aberration: { bypass: true,  amount: 0 },
     flash:      { bypass: true,  strength: 0, radius: 0.7, softness: 0.5, vignette: 0 },
@@ -569,8 +577,40 @@ function defaultParams() {
    halation etc. arrive with their passes. Chirag signs off on look quality on
    the comparison strip; these are the starting grade, not the last word. */
 const LOOKS = [
-  { id: "none", name: "Original", params: {} },
-  { id: "sorrenti", name: "Sorrenti", params: {
+  { id: "none", name: "Original", era: "", params: {} },
+
+  // ---- Pre-colour & early colour (going back, per Chirag) ----
+  { id: "daguerreotype", name: "Daguerreotype", era: "1840s", params: {
+      // toned silver monochrome, hard contrast, heavy edge fall-off, cased oval
+      curve: { slope: [1.12, 1.12, 1.12], offset: [-0.03, -0.03, -0.03], power: [1.18, 1.18, 1.18], sat: 0,
+               tone: { lo: [0.07, 0.09, 0.13], hi: [0.91, 0.94, 0.98], amt: 1.0 } },   // cool silver
+      defocus: { bypass: false, radius: 1.4, radial: 1.0, blend: 1 },
+      flash: { bypass: false, strength: 0, radius: 0.6, softness: 0.4, vignette: 0.65 },
+      trim: { bypass: false, aspect: "4:3", border: 0.02, stamp: false, matte: true } } },
+  { id: "autochrome", name: "Autochrome", era: "1910s", params: {
+      // first colour: soft, painterly, muted pastels, warm, starch-grain
+      curve: { slope: [1.05, 1.0, 0.9], offset: [0.05, 0.045, 0.04], power: [0.96, 0.96, 0.98], sat: 0.72 },
+      defocus: { bypass: false, radius: 2.4, radial: 0, blend: 0.55 },
+      halation: { bypass: false, threshold: 0.7, strength: 0.3, radius: 3, tint: [1, 0.85, 0.7] },
+      grain: { bypass: false, amount: 0.07, size: 1.2 },
+      trim: { bypass: false, aspect: "4:3", border: 0, stamp: false, matte: false } } },
+  { id: "kodachrome", name: "Kodachrome", era: "1950s", params: {
+      // rich saturated warm slide film, deep blacks, fine grain
+      curve: { slope: [1.06, 1.0, 0.92], offset: [-0.03, -0.02, -0.02], power: [1.05, 1.03, 1.06], sat: 1.32 },
+      halation: { bypass: false, threshold: 0.82, strength: 0.12, radius: 2, tint: [1, 0.7, 0.6] },
+      flash: { bypass: false, strength: 0, radius: 0.7, softness: 0.5, vignette: 0.2 },
+      grain: { bypass: false, amount: 0.045, size: 1 },
+      trim: { bypass: false, aspect: "3:2", border: 0, stamp: false, matte: false } } },
+  { id: "polaroid", name: "Polaroid", era: "1970s", params: {
+      // faded, lifted, green-yellow cast, creamy bloom, white frame, square
+      curve: { slope: [1.0, 1.02, 0.94], offset: [0.07, 0.07, 0.05], power: [0.9, 0.9, 0.92], sat: 0.9 },
+      defocus: { bypass: false, radius: 1.5, radial: 0, blend: 0.35 },
+      halation: { bypass: false, threshold: 0.6, strength: 0.5, radius: 4, tint: [1, 0.92, 0.78] },
+      grain: { bypass: false, amount: 0.04, size: 1 },
+      trim: { bypass: false, aspect: "1:1", border: 0.055, stamp: false, matte: false } } },
+
+  // ---- The 90s deck (the original four) ----
+  { id: "sorrenti", name: "Sorrenti", era: "1990s", params: {
       // lifted blacks, muted sat, green-yellow midtones · slight radial defocus ·
       // hot-center hard-falloff flash
       curve: { slope: [1.02, 1.04, 0.94], offset: [0.05, 0.055, 0.03], power: [0.95, 0.92, 1.02], sat: 0.82 },
@@ -580,14 +620,14 @@ const LOOKS = [
       halation: { bypass: false, threshold: 0.68, strength: 0.6, radius: 3, tint: [1, 0.42, 0.32] },
       grain: { bypass: false, amount: 0.14, size: 2.5 },       // heavy, chunky
       trim: { bypass: false, aspect: "4:3", border: 0, stamp: false, matte: false } } },
-  { id: "corinne", name: "Corinne Day", params: {
+  { id: "corinne", name: "Corinne Day", era: "1990s", params: {
       // grey cast, low contrast, cool daylight · no flash, no defocus, minimal
       // halation (§4: minimal ≠ none)
       curve: { slope: [0.90, 0.92, 0.95], offset: [0.06, 0.06, 0.07], power: [1.0, 1.0, 0.98], sat: 0.85 },
       halation: { bypass: false, threshold: 0.82, strength: 0.15, radius: 2, tint: [1, 0.85, 0.75] },
       grain: { bypass: false, amount: 0.09, size: 1 },         // medium, fine
       trim: { bypass: false, aspect: "3:2", border: 0, stamp: false, matte: false } } },
-  { id: "disposable", name: "Disposable", params: {
+  { id: "disposable", name: "Disposable", era: "1990s", params: {
       // warm, crushed shadows, oversaturated · plastic-lens edge blur + fringe ·
       // harsh full-frame flash, deep vignette
       curve: { slope: [1.12, 1.06, 0.92], offset: [-0.04, -0.03, -0.03], power: [1.05, 1.02, 1.05], sat: 1.22 },
@@ -597,7 +637,7 @@ const LOOKS = [
       halation: { bypass: false, threshold: 0.75, strength: 0.35, radius: 2.5, tint: [1, 0.6, 0.5] },
       grain: { bypass: false, amount: 0.13, size: 1.5 },       // heavy
       trim: { bypass: false, aspect: "4:3", border: 0, stamp: true, matte: false } } },
-  { id: "mall", name: "Mall Studio", params: {
+  { id: "mall", name: "Mall Studio", era: "1990s", params: {
       // warm, glowy, lifted everything · full soft-focus (uniform, part-blended) ·
       // soft omni flash
       curve: { slope: [1.04, 1.02, 0.98], offset: [0.06, 0.05, 0.04], power: [0.92, 0.92, 0.95], sat: 1.05 },
@@ -606,6 +646,22 @@ const LOOKS = [
       halation: { bypass: false, threshold: 0.55, strength: 0.55, radius: 4, tint: [1, 0.9, 0.8] },
       grain: { bypass: false, amount: 0.05, size: 1 },         // light
       trim: { bypass: false, aspect: "4:3", border: 0, stamp: false, matte: false } } },  // matte optional, off by default
+
+  // ---- Digital era (going further, per Chirag) ----
+  { id: "digicam", name: "Digicam", era: "2000s", params: {
+      // early compact digital: cool, crisp-contrast, harsh small flash, fringe, timestamp
+      curve: { slope: [0.98, 1.0, 1.06], offset: [0, 0, 0], power: [1.08, 1.06, 1.08], sat: 1.06 },
+      aberration: { bypass: false, amount: 1.0 },
+      flash: { bypass: false, strength: 0.42, radius: 0.5, softness: 0.2, vignette: 0.35 },
+      grain: { bypass: false, amount: 0.03, size: 1 },
+      trim: { bypass: false, aspect: "4:3", border: 0, stamp: true, matte: false } } },
+  { id: "phonecam", name: "Early Phone", era: "2010s", params: {
+      // low-fi first-gen phone: washed, green-cool cast, noisy, soft, low dynamic range
+      curve: { slope: [0.98, 1.03, 1.0], offset: [0.04, 0.05, 0.05], power: [0.95, 0.95, 0.96], sat: 0.88 },
+      defocus: { bypass: false, radius: 1.4, radial: 0, blend: 0.3 },
+      halation: { bypass: false, threshold: 0.75, strength: 0.2, radius: 2, tint: [1, 0.95, 0.9] },
+      grain: { bypass: false, amount: 0.1, size: 1 },
+      trim: { bypass: false, aspect: "4:3", border: 0, stamp: false, matte: false } } },
 ];
 
 /* Deep-merge preset overrides onto defaults. Arrays (vec3s) replace wholesale —
@@ -663,6 +719,9 @@ uniform vec3 u_slope;
 uniform vec3 u_offset;
 uniform vec3 u_power;
 uniform float u_sat;
+uniform vec3 u_toneLo;   // duotone shadow tint
+uniform vec3 u_toneHi;   // duotone highlight tint
+uniform float u_toneAmt; // 0 = off (identity); >0 blends the luma→lo..hi ramp
 out vec4 o;
 void main() {
   vec2 uv = u_flipY ? vec2(v_uv.x, 1.0 - v_uv.y) : v_uv;
@@ -674,6 +733,12 @@ void main() {
   // Saturation about Rec.709 luma.
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
   c = clamp(mix(vec3(l), c, u_sat), 0.0, 1.0);
+  // Duotone toning — split-tone / sepia / silver for the pre-colour eras. Maps the
+  // (possibly desaturated) luminance onto a shadow→highlight tint ramp, blended by
+  // amount. amt 0 leaves colour untouched, so every existing look is unchanged.
+  float lt = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  vec3 duo = mix(u_toneLo, u_toneHi, lt);
+  c = clamp(mix(c, duo, u_toneAmt), 0.0, 1.0);
   o = vec4(c, src.a);
 }`;
 
@@ -910,6 +975,10 @@ const PASSES = [
       gl.uniform3f(uloc("u_offset"), p.offset[0], p.offset[1], p.offset[2]);
       gl.uniform3f(uloc("u_power"), p.power[0], p.power[1], p.power[2]);
       gl.uniform1f(uloc("u_sat"), p.sat);
+      const tn = p.tone || { lo: [0, 0, 0], hi: [1, 1, 1], amt: 0 };
+      gl.uniform3f(uloc("u_toneLo"), tn.lo[0], tn.lo[1], tn.lo[2]);
+      gl.uniform3f(uloc("u_toneHi"), tn.hi[0], tn.hi[1], tn.hi[2]);
+      gl.uniform1f(uloc("u_toneAmt"), tn.amt);
     },
   },
   {
@@ -1685,6 +1754,8 @@ function boot() {
       const img = document.createElement("img"); img.className = "thumb"; img.alt = "";
       const nm = document.createElement("span"); nm.className = "name"; nm.textContent = names[lk.id] || lk.name;
       b.append(img, nm);
+      // Era decade label (a prop, locale-independent like the date stamp — §13).
+      if (lk.era) { const e = document.createElement("span"); e.className = "era"; e.textContent = lk.era; b.appendChild(e); }
       b.addEventListener("click", () => setLook(lk.id));
       strip.appendChild(b);
     }
