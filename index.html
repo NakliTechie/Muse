@@ -1903,6 +1903,54 @@ function boot() {
     snapshot: () => view.getContext("2d").getImageData(0, 0, view.width, view.height).data,
   };
 
+  /* ---- Agent face (§8): window.muse, gated behind muse.dev, off by default.
+     Same pipeline the UI drives — one mechanism, two doors — and the headless
+     test surface for M1. applyLook renders an arbitrary source off to the side
+     and restores the interactive state after. Exports mark via:"agent". ---- */
+  const getLooks = () => LOOKS.map((l) => ({ id: l.id, name: l.name, params: JSON.parse(JSON.stringify(l.params || {})) }));
+
+  async function toDrawable(source) {
+    if (source instanceof Blob) return await createImageBitmap(source);
+    if (typeof ImageData !== "undefined" && source instanceof ImageData) return source;   // texImage2D accepts ImageData
+    if (source && source.width && (source.getContext || source.naturalWidth || source.close)) return source;   // canvas/bitmap/img
+    throw new Error("applyLook: source must be a Blob, ImageData, or drawable");
+  }
+  async function renderToPNG(recipe) {
+    const blob = await new Promise((res) => view.toBlob(res, "image/png"));
+    if (!blob) throw new Error("toBlob returned null");
+    const withRecipe = embedRecipePNG(new Uint8Array(await blob.arrayBuffer()), serialiseRecipe(recipe));
+    return new Blob([withRecipe], { type: "image/png" });
+  }
+  async function applyLook(source, lookIdOrParams, opts = {}) {
+    const img = await toDrawable(source);
+    const rec = typeof lookIdOrParams === "string" ? makeRecipe(lookIdOrParams) : deserialiseRecipe(lookIdOrParams);
+    if (opts.seed != null) rec.seed = opts.seed >>> 0;
+    rec.via = "agent";
+    const prev = RECIPE;                       // render off the current state, then restore
+    RECIPE = rec;
+    engine.render(img); compositeTrim(canvas, view);
+    const out = await renderToPNG(rec);
+    RECIPE = prev; sourceDirty = true; if (hasContent) draw();
+    return out;
+  }
+  async function agentExport(opts = {}) {
+    if (!hasContent) throw new Error("muse.export: no image loaded");
+    const rec = Object.assign(getRecipe(), { via: "agent" });
+    if ((opts.format || "png") === "png") return renderToPNG(rec);
+    // JPEG path: COM-marker embed is deferred (§12); return the frame without a recipe.
+    return await new Promise((res) => view.toBlob(res, "image/jpeg", 0.92));
+  }
+  function installAgentFace() {
+    window.muse = { getLooks, applyLook, getRecipe: () => getRecipe(), setRecipe: (j) => setRecipe(j), export: agentExport };
+  }
+  // Dev toggle without a reload — the self-test flips this on; off by default (§8).
+  window.__museDev = (on) => {
+    if (on) { store.set(STORE_KEYS.dev, "1"); installAgentFace(); }
+    else { store.del(STORE_KEYS.dev); try { delete window.muse; } catch (_) { window.muse = undefined; } }
+    return !!store.get(STORE_KEYS.dev);
+  };
+  if (store.get(STORE_KEYS.dev)) installAgentFace();
+
   // Expose the loaders + draw for the M1 editor layers (sliders, presets, export)
   // and the M1 self-test to drive. Kept separate from the frozen M0 face above.
   boot.editor = { loadFile, loadSample, setSource, setLook, setRecipe, getRecipe, draw,
