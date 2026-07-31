@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'">
+<meta name="version" content="0.0.7-m0">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230b0b0d'/%3E%3Ccircle cx='8' cy='8' r='4.5' fill='none' stroke='%23d8c08a' stroke-width='1.6'/%3E%3Ccircle cx='8' cy='8' r='1.6' fill='%23d8c08a'/%3E%3C/svg%3E">
+<title>Muse — M0 determinism gate</title>
+<style>
+  :root {
+    --bg: #0b0b0d; --surface: #16161a; --ink: #ececf0; --accent: #d8c08a;
+    --muted: #8a8a93; --danger: #e06a5a; --ok: #5ec08a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  .banner {
+    display: inline-block; padding: 8px 18px; border-radius: 8px; font-weight: 700;
+    margin: 0 0 16px; border: 1px solid #ffffff20; background: var(--surface);
+  }
+  .banner[data-state="pass"] { color: var(--ok); border-color: var(--ok); }
+  .banner[data-state="fail"] { color: var(--danger); border-color: var(--danger); }
+  .banner[data-state="running"] { color: var(--accent); }
+  table { border-collapse: collapse; width: 100%; max-width: 980px; background: var(--surface); border-radius: 8px; overflow: hidden; }
+  th, td { padding: 6px 12px; text-align: left; border-bottom: 1px solid #ffffff10; font-variant-numeric: tabular-nums; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  td.pass { color: var(--ok); } td.fail { color: var(--danger); font-weight: 700; }
+  code { color: var(--accent); font-size: 12px; }
+  .panel { margin-top: 24px; }
+  .panel h2 { font-size: 14px; color: var(--muted); margin: 0 0 8px; }
+  iframe {
+    width: 480px; height: 400px; border: 1px solid #ffffff20; border-radius: 8px;
+    background: #000; transform-origin: top left;
+  }
+  #strip { max-width: 100%; border: 1px solid #ffffff20; border-radius: 8px; display: block; }
+  .btn {
+    appearance: none; border: 1px solid #ffffff20; background: #ffffff0d; color: var(--ink);
+    border-radius: 8px; padding: 7px 12px; cursor: pointer; font: inherit; margin: 10px 0;
+    display: inline-block; text-decoration: none;
+  }
+  .btn:hover { background: #ffffff16; }
+</style>
+</head>
+<body>
+<script>
+/* Gate-artifact page strings — same one-map discipline as the app (§13). */
+const LANG = {
+  en: {
+    title: "Muse — M0 determinism gate",
+    sub: "Fixed test image × fixed params × fixed seed, rendered twice through the full 8-pass chain via the app's own harness face. SHA-256 of the two pixel buffers must match, and the recipe JSON must round-trip byte-identical. 4 looks × 3 test images.",
+    running: "RUNNING…",
+    pass: "PASS — all 12 cells",
+    fail: "FAIL — see rows below",
+    thLook: "Look", thImage: "Image", thHash1: "SHA-256 render 1", thHash2: "SHA-256 render 2",
+    thPixels: "Pixels", thRecipe: "Recipe round-trip",
+    cellPass: "PASS", cellFail: "FAIL",
+    appPanel: "Live app (driven via window.__muse_m0 — one pipeline, two doors)",
+    stripPanel: "Comparison strip (gate artifact 2 — human look-quality sign-off)",
+    download: "Download strip PNG",
+    stripCaption: (v) => `Muse ${v} · full 8-pass chain · 3 test portraits × 5 looks`,
+  },
+};
+const t = (k, ...a) => { const v = LANG.en[k]; return typeof v === "function" ? v(...a) : v; };
+document.title = t("title");
+</script>
+
+<h1 id="h1"></h1>
+<p class="sub" id="sub"></p>
+<div class="banner" data-state="running" id="banner"></div>
+
+<table id="results">
+  <thead><tr>
+    <th id="th-look"></th><th id="th-image"></th><th id="th-h1"></th><th id="th-h2"></th>
+    <th id="th-px"></th><th id="th-rt"></th>
+  </tr></thead>
+  <tbody id="tbody"></tbody>
+</table>
+
+<div class="panel">
+  <h2 id="app-h"></h2>
+  <iframe id="app" src="index.html" title="Muse app under test"></iframe>
+</div>
+
+<div class="panel">
+  <h2 id="strip-h"></h2>
+  <canvas id="strip" width="1548" height="741"></canvas>
+  <a class="btn" id="dl" download="muse-m0-comparison-strip.png"></a>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+$("h1").textContent = t("title");
+$("sub").textContent = t("sub");
+$("banner").textContent = t("running");
+$("th-look").textContent = t("thLook"); $("th-image").textContent = t("thImage");
+$("th-h1").textContent = t("thHash1"); $("th-h2").textContent = t("thHash2");
+$("th-px").textContent = t("thPixels"); $("th-rt").textContent = t("thRecipe");
+$("app-h").textContent = t("appPanel"); $("strip-h").textContent = t("stripPanel");
+$("dl").textContent = t("download");
+
+async function sha256hex(u8) {
+  const d = await crypto.subtle.digest("SHA-256", u8);
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+const short = (h) => h.slice(0, 16) + "…";
+
+function waitForHarness(w) {
+  return new Promise((resolve, reject) => {
+    const t0 = performance.now();
+    (function poll() {
+      if (w.__muse_m0) return resolve(w.__muse_m0);
+      if (performance.now() - t0 > 10000) return reject(new Error("harness not found"));
+      setTimeout(poll, 50);
+    })();
+  });
+}
+
+function addRow(look, img, h1, h2, pxOk, rtOk) {
+  const tr = document.createElement("tr");
+  const cells = [look, String(img), short(h1), short(h2)];
+  for (const c of cells) {
+    const td = document.createElement("td");
+    if (c === cells[2] || c === cells[3]) { const code = document.createElement("code"); code.textContent = c; td.appendChild(code); }
+    else td.textContent = c;
+    tr.appendChild(td);
+  }
+  for (const ok of [pxOk, rtOk]) {
+    const td = document.createElement("td");
+    td.className = ok ? "pass" : "fail";
+    td.textContent = ok ? t("cellPass") : t("cellFail");
+    tr.appendChild(td);
+  }
+  $("tbody").appendChild(tr);
+}
+
+/* The gate: 4 looks × 3 test images. 'none' is not a look — it's the
+   identity reference and stays out of the gate per §9. */
+const GATE_LOOKS = ["sorrenti", "corinne", "disposable", "mall"];
+const GATE_IMAGES = [0, 1, 2];
+
+async function runGate(M) {
+  let allPass = true;
+  const summary = [];
+  for (const look of GATE_LOOKS) {
+    for (const img of GATE_IMAGES) {
+      M.setLook(look); M.setVariant(img);
+      const h1 = await sha256hex(M.snapshot());
+      M.redraw();                                  // second render, same everything
+      const h2 = await sha256hex(M.snapshot());
+      const s1 = M.serialiseRecipe(M.getRecipe());
+      const s2 = M.serialiseRecipe(M.deserialiseRecipe(s1));
+      const pxOk = h1 === h2, rtOk = s1 === s2;
+      addRow(look, img, h1, h2, pxOk, rtOk);
+      summary.push({ look, img, pxOk, rtOk, sha256: h1 });
+      allPass = allPass && pxOk && rtOk;
+    }
+  }
+  return { allPass, summary };
+}
+
+/* Gate artifact 2: the comparison strip, rendered from the same live app so
+   the PNG anyone downloads is exactly what the chain produced. */
+function renderStrip(M, w) {
+  const c = $("strip"), x = c.getContext("2d");
+  const looks = M.LOOKS, variants = GATE_IMAGES;
+  const tw = 300, th = 225, pad = 8, lblH = 22, topH = 20;
+  c.width = pad + looks.length * (tw + pad);
+  c.height = topH + variants.length * (th + pad) + lblH;
+  x.fillStyle = "#0b0b0d"; x.fillRect(0, 0, c.width, c.height);
+  x.font = "12px system-ui, sans-serif"; x.textBaseline = "middle";
+  for (let ci = 0; ci < looks.length; ci++) {
+    x.fillStyle = "#d8c08a";
+    x.fillText(looks[ci].name, pad + ci * (tw + pad) + 4, topH / 2);
+  }
+  const view = M.view;
+  for (let ri = 0; ri < variants.length; ri++) {
+    for (let ci = 0; ci < looks.length; ci++) {
+      M.setLook(looks[ci].id); M.setVariant(variants[ri]);
+      const dx = pad + ci * (tw + pad), dy = topH + ri * (th + pad);
+      const s = Math.min(tw / view.width, th / view.height);
+      const fw = Math.round(view.width * s), fh = Math.round(view.height * s);
+      const fx = dx + Math.floor((tw - fw) / 2), fy = dy + Math.floor((th - fh) / 2);
+      x.drawImage(view, fx, fy, fw, fh);
+      x.strokeStyle = "#ffffff14"; x.strokeRect(fx + 0.5, fy + 0.5, fw, fh);
+    }
+  }
+  const ver = w.document.querySelector('meta[name="version"]').content;
+  x.fillStyle = "#8a8a93";
+  x.fillText(t("stripCaption", ver), pad + 2, c.height - lblH / 2);
+  $("dl").href = c.toDataURL("image/png");
+}
+
+window.addEventListener("load", async () => {
+  const banner = $("banner");
+  try {
+    const w = $("app").contentWindow;
+    const M = await waitForHarness(w);
+    const { allPass, summary } = await runGate(M);
+    renderStrip(M, w);
+    banner.textContent = allPass ? t("pass") : t("fail");
+    banner.dataset.state = allPass ? "pass" : "fail";
+    console.log("[m0-determinism]", allPass ? "PASS" : "FAIL", JSON.stringify(summary));
+    window.__m0_gate = { allPass, summary };   // headless checker reads this
+  } catch (e) {
+    banner.textContent = t("fail");
+    banner.dataset.state = "fail";
+    console.error("[m0-determinism] gate error:", e);
+    window.__m0_gate = { allPass: false, error: String(e) };
+  }
+});
+</script>
+</body>
+</html>

@@ -15,7 +15,12 @@ deterministic WebGL2 shader chain. **Nothing ever leaves the device.**
 
 ## Status
 
-Scaffolded from handoff. Not built yet. Milestones: **M0 fidelity spike → M1 editor
+**M0 fidelity spike: chain complete, machine gate green.** The full 8-pass chain
+(curve+cast · defocus · chromatic aberration · flash/vignette · halation · seeded
+grain · light leak · trim) renders deterministically — `m0-determinism.html`
+self-tests 4 looks × 3 test images with SHA-256 pixel hashing and byte-identical
+recipe round-trips, PASS/FAIL in-DOM. Remaining M0 gate: human look-quality
+sign-off on the comparison strip. Milestones: **M0 fidelity spike → M1 editor
 (upload) → M2 camera (selfie)**.
 
 ## Handoff docs
