@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!--
+  CSP: nothing leaves the device. img-src allows blob:/data: for loaded photos and
+  procedural fixtures; connect-src is 'none' in M0 (GA pageview-only added at M1).
+  Note: file:// does not enforce this identically to https — the header is the source
+  of truth once deployed to Cloudflare Pages.
+-->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'">
+<meta name="version" content="0.0.1-m0">
+<title>Muse</title>
+<style>
+  :root {
+    /* House palette — dark default (photo tool; chrome stays out of the image's way) */
+    --bg:      #0b0b0d;
+    --surface: #16161a;
+    --ink:     #ececf0;
+    --accent:  #d8c08a;   /* warm film-gold */
+    --muted:   #8a8a93;
+    --danger:  #e06a5a;
+    --radius: 10px;
+    --gap: 14px;
+    font-synthesis: none;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .topbar {
+    display: flex; align-items: center; gap: var(--gap);
+    padding: 10px 16px;
+    border-bottom: 1px solid #ffffff12;
+    flex: 0 0 auto;
+  }
+  .brand { font-weight: 600; letter-spacing: .02em; }
+  .brand .dot { color: var(--accent); }
+  .spacer { flex: 1 1 auto; }
+  .stage {
+    flex: 1 1 auto;
+    position: relative;
+    display: grid;
+    place-items: center;
+    min-height: 0;
+    padding: var(--gap);
+  }
+  #view {
+    max-width: 100%;
+    max-height: 100%;
+    border-radius: var(--radius);
+    box-shadow: 0 6px 30px #0008;
+    image-rendering: auto;
+    background: #000;
+  }
+  .footer {
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 16px;
+    border-top: 1px solid #ffffff12;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .footer .ver { font-variant-numeric: tabular-nums; }
+
+  /* Full-viewport WebGL2-unavailable error state — no partial UI behind it. */
+  .fatal {
+    position: fixed; inset: 0; z-index: 50;
+    display: none;
+    place-items: center;
+    background: var(--bg);
+    padding: 24px;
+  }
+  .fatal[data-show="1"] { display: grid; }
+  .fatal .card {
+    max-width: 520px;
+    background: var(--surface);
+    border: 1px solid #ffffff14;
+    border-radius: var(--radius);
+    padding: 28px;
+  }
+  .fatal h1 { margin: 0 0 10px; font-size: 18px; }
+  .fatal p { color: var(--muted); margin: 0 0 12px; }
+  .fatal ul { color: var(--muted); margin: 0; padding-left: 18px; }
+  .hint { color: var(--muted); font-size: 12px; }
+  .btn {
+    appearance: none; border: 1px solid #ffffff20; background: #ffffff0d;
+    color: var(--ink); border-radius: 8px; padding: 7px 12px; cursor: pointer;
+    font: inherit;
+  }
+  .btn:hover { background: #ffffff16; }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <span class="brand">Muse<span class="dot">.</span></span>
+    <span class="hint" id="tagline"></span>
+    <span class="spacer"></span>
+    <button class="btn" id="reload-sample" type="button"></button>
+  </div>
+
+  <main class="stage">
+    <canvas id="view" width="1024" height="768" aria-label="image preview"></canvas>
+  </main>
+
+  <div class="footer">
+    <span id="engine-status"></span>
+    <span class="spacer"></span>
+    <span class="ver" id="ver"></span>
+  </div>
+
+  <!-- WebGL2 capability gate: full-viewport, no dead sliders behind it -->
+  <div class="fatal" id="fatal" role="alertdialog" aria-modal="true">
+    <div class="card">
+      <h1 id="fatal-title"></h1>
+      <p id="fatal-body"></p>
+      <ul id="fatal-list"></ul>
+    </div>
+  </div>
+
+<script>
+"use strict";
+/* =========================================================================
+ * Muse — M0 rendering harness (A1)
+ * Single-file, zero-dep. WebGL2, attribute-less full-screen triangle,
+ * ping-pong FBO framework. Passes (A2–A7) slot into PASSES[].
+ * ========================================================================= */
+
+/* ---- i18n: every string through one lang map from the first commit (§13) ---- */
+const LANG = {
+  en: {
+    tagline: "90s film looks, on-device.",
+    reloadSample: "New sample",
+    engineReady: (n) => `WebGL2 ready · ${n} pass${n === 1 ? "" : "es"} in chain`,
+    version: "v0.0.1 · M0",
+    fatalTitle: "WebGL2 isn't available",
+    fatalBody: "Muse renders every look with a single WebGL2 shader chain — there's no fallback path by design. Your browser or device didn't provide a WebGL2 context.",
+    fatalList: [
+      "Use a recent Chrome, Edge, Firefox, or Safari (desktop or mobile).",
+      "If you're on a virtual machine or have hardware acceleration disabled, re-enable it.",
+      "On very old devices WebGL2 may simply be unsupported.",
+    ],
+  },
+};
+let LOCALE = "en";
+const t = (k, ...a) => {
+  const v = (LANG[LOCALE] || LANG.en)[k];
+  return typeof v === "function" ? v(...a) : v;
+};
+
+/* ---- DOM ---- */
+const $ = (id) => document.getElementById(id);
+const canvas = $("view");
+
+/* ---- WebGL2 acquisition + capability gate ---- */
+function getGL() {
+  const opts = { antialias: false, premultipliedAlpha: false, preserveDrawingBuffer: true, alpha: false };
+  try {
+    const gl = canvas.getContext("webgl2", opts);
+    return gl || null;
+  } catch (_) { return null; }
+}
+
+function showFatal() {
+  $("fatal-title").textContent = t("fatalTitle");
+  $("fatal-body").textContent = t("fatalBody");
+  const ul = $("fatal-list");
+  ul.textContent = "";
+  for (const line of t("fatalList")) {
+    const li = document.createElement("li");
+    li.textContent = line;
+    ul.appendChild(li);
+  }
+  $("fatal").setAttribute("data-show", "1");
+}
+
+/* ---- GL helpers ---- */
+function compile(gl, type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    const log = gl.getShaderInfoLog(s);
+    gl.deleteShader(s);
+    throw new Error("shader compile failed: " + log);
+  }
+  return s;
+}
+function program(gl, fragSrc, vertSrc) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(p, compile(gl, gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+    const log = gl.getProgramInfoLog(p);
+    gl.deleteProgram(p);
+    throw new Error("program link failed: " + log);
+  }
+  return p;
+}
+
+/* Attribute-less full-screen triangle: positions + UV derived from gl_VertexID.
+   Draw with drawArrays(TRIANGLES, 0, 3); no VBO/VAO attributes needed. */
+const VERT = `#version 300 es
+out vec2 v_uv;
+void main() {
+  // 3-vertex triangle that covers the clip volume; uv in [0,1] over the quad.
+  vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+  v_uv = p;                       // 0,0 / 2,0 / 0,2  -> covers [0,1]^2
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+/* Identity pass — proves the chain end-to-end for A1. Real passes land in A2–A7.
+   flipY lets us correct the CPU-uploaded source (which is top-left origin) into
+   GL's bottom-left convention exactly once, at the entry pass. */
+const IDENTITY_FRAG = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+uniform sampler2D u_src;
+uniform bool u_flipY;
+out vec4 o;
+void main() {
+  vec2 uv = u_flipY ? vec2(v_uv.x, 1.0 - v_uv.y) : v_uv;
+  o = texture(u_src, uv);
+}`;
+
+/* ---- Pass registry. A2–A7 push real passes here (ordered). ---- */
+const PASSES = [
+  {
+    id: "identity",
+    name: "Passthrough",
+    enabled: true,
+    frag: IDENTITY_FRAG,
+    // set per-draw uniforms; `first` = true on the first executed pass (reads source tex)
+    uniforms(gl, prog, ctx) {
+      gl.uniform1i(gl.getUniformLocation(prog, "u_flipY"), ctx.first ? 1 : 0);
+    },
+  },
+];
+
+/* ---- Engine: compiles passes, manages ping-pong FBOs, renders the chain ---- */
+function makeEngine(gl) {
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); // we flip in-shader at the entry pass
+
+  // Compile every registered pass once.
+  const compiled = PASSES.map((p) => ({ def: p, prog: program(gl, p.frag, VERT) }));
+
+  // Source texture (the loaded/procedural image).
+  const srcTex = gl.createTexture();
+  function setNPOT(tex) {
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  }
+
+  // Two ping-pong render targets (RGBA8; float upgrade deferred to halation, A5).
+  let W = 0, H = 0;
+  const targets = [makeTarget(), makeTarget()];
+  function makeTarget() {
+    const tex = gl.createTexture();
+    const fbo = gl.createFramebuffer();
+    return { tex, fbo };
+  }
+  function sizeTargets(w, h) {
+    if (w === W && h === H) return;
+    W = w; H = h;
+    for (const tgt of targets) {
+      gl.bindTexture(gl.TEXTURE_2D, tgt.tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      setNPOT(tgt.tex);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, tgt.fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tgt.tex, 0);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
+  function uploadSource(image) {
+    gl.bindTexture(gl.TEXTURE_2D, srcTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, image);
+    setNPOT(srcTex);
+    return { w: image.width, h: image.height };
+  }
+
+  const vao = gl.createVertexArray(); // empty VAO required to draw in WebGL2 core
+
+  // Run the chain. If image given, (re)upload it. Renders final to the default
+  // framebuffer (screen). Returns nothing; A10 will read pixels off a variant.
+  function render(image) {
+    if (image) {
+      const dim = uploadSource(image);
+      if (canvas.width !== dim.w || canvas.height !== dim.h) {
+        canvas.width = dim.w; canvas.height = dim.h;
+      }
+      sizeTargets(dim.w, dim.h);
+    }
+    const active = compiled.filter((c) => c.def.enabled);
+
+    gl.bindVertexArray(vao);
+    gl.activeTexture(gl.TEXTURE0);
+
+    let readTex = srcTex;
+    let ping = 0;
+    for (let i = 0; i < active.length; i++) {
+      const c = active[i];
+      const last = i === active.length - 1;
+      const ctx = { first: i === 0, last, index: i, width: W, height: H };
+
+      if (last) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, canvas.width, canvas.height);
+      } else {
+        const dst = targets[ping];
+        gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fbo);
+        gl.viewport(0, 0, W, H);
+      }
+
+      gl.useProgram(c.prog);
+      gl.bindTexture(gl.TEXTURE_2D, readTex);
+      gl.uniform1i(gl.getUniformLocation(c.prog, "u_src"), 0);
+      gl.uniform2f(gl.getUniformLocation(c.prog, "u_res"), W, H);
+      c.def.uniforms && c.def.uniforms(gl, c.prog, ctx);
+
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+      if (!last) { readTex = targets[ping].tex; ping ^= 1; }
+    }
+    gl.bindVertexArray(null);
+  }
+
+  return { render, get passCount() { return compiled.filter((c) => c.def.enabled).length; } };
+}
+
+/* ---- Procedural test fixture (A1): a face-ish subject with skin midtones,
+   a bright window (halation/flash target), shadow, and neutral patches.
+   Drawn on a 2D canvas so the harness renders with zero external assets and
+   honors the CSP. Deterministic — no Math.random. ---- */
+function makeSampleImage(w, h, variant) {
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const x = c.getContext("2d");
+
+  // background wash — cool daylight vs warm interior by variant
+  const warm = variant % 2 === 0;
+  const g = x.createLinearGradient(0, 0, 0, h);
+  if (warm) { g.addColorStop(0, "#3a2f28"); g.addColorStop(1, "#141013"); }
+  else      { g.addColorStop(0, "#2c343b"); g.addColorStop(1, "#0f1418"); }
+  x.fillStyle = g; x.fillRect(0, 0, w, h);
+
+  // bright window / light source — a hot region for flash + halation to grab
+  const wx = warm ? w * 0.72 : w * 0.2;
+  const wg = x.createRadialGradient(wx, h * 0.28, 8, wx, h * 0.28, w * 0.35);
+  wg.addColorStop(0, "#fffdf6"); wg.addColorStop(0.5, "#fff4d8cc"); wg.addColorStop(1, "#fff4d800");
+  x.fillStyle = wg; x.fillRect(0, 0, w, h);
+
+  // subject: head + shoulders silhouette with skin gradient
+  const cx = w * 0.5, cy = h * 0.58, rr = Math.min(w, h) * 0.22;
+  const skin = x.createRadialGradient(cx - rr * 0.3, cy - rr * 0.4, rr * 0.2, cx, cy, rr * 1.2);
+  const tone = variant % 3; // vary skin tone across the fixed set
+  const tones = [["#f0c9a8", "#7a4b34"], ["#c98f66", "#5a3320"], ["#8a5a3c", "#3a2114"]];
+  skin.addColorStop(0, tones[tone][0]); skin.addColorStop(1, tones[tone][1]);
+  x.fillStyle = skin;
+  x.beginPath(); x.ellipse(cx, cy, rr, rr * 1.15, 0, 0, Math.PI * 2); x.fill();
+  x.beginPath(); x.ellipse(cx, cy + rr * 1.5, rr * 1.8, rr * 1.1, 0, 0, Math.PI); x.fill();
+
+  // eyes/mouth hints — a little structure for defocus/CA to act on
+  x.fillStyle = "#20140e";
+  x.beginPath(); x.ellipse(cx - rr * 0.4, cy - rr * 0.1, rr * 0.09, rr * 0.06, 0, 0, 7); x.fill();
+  x.beginPath(); x.ellipse(cx + rr * 0.4, cy - rr * 0.1, rr * 0.09, rr * 0.06, 0, 0, 7); x.fill();
+  x.strokeStyle = "#3a201a"; x.lineWidth = Math.max(2, rr * 0.03);
+  x.beginPath(); x.arc(cx, cy + rr * 0.35, rr * 0.35, 0.15 * Math.PI, 0.85 * Math.PI); x.stroke();
+
+  // neutral + saturated patches bottom strip — reference for curve/cast reads
+  const patches = ["#ffffff", "#808080", "#000000", "#c02b2b", "#2bc04a", "#2b5cc0"];
+  const pw = w / patches.length;
+  for (let i = 0; i < patches.length; i++) {
+    x.fillStyle = patches[i];
+    x.fillRect(i * pw, h - h * 0.06, pw, h * 0.06);
+  }
+  return c;
+}
+
+/* ---- Boot ---- */
+function boot() {
+  // static strings
+  $("tagline").textContent = t("tagline");
+  $("reload-sample").textContent = t("reloadSample");
+  $("ver").textContent = t("version");
+
+  const gl = getGL();
+  if (!gl) { showFatal(); return; }
+
+  let engine;
+  try {
+    engine = makeEngine(gl);
+  } catch (e) {
+    console.error("[muse] engine init failed:", e);
+    showFatal();
+    return;
+  }
+
+  let variant = 0;
+  function draw() {
+    const img = makeSampleImage(1024, 768, variant);
+    engine.render(img);
+    $("engine-status").textContent = t("engineReady", engine.passCount);
+  }
+  draw();
+
+  $("reload-sample").addEventListener("click", () => { variant = (variant + 1) % 6; draw(); });
+
+  // expose a minimal handle for the M0 determinism harness (A10) to drive later
+  window.__muse_m0 = { gl, engine, makeSampleImage, redraw: draw };
+  console.log("[muse] M0 harness up ·", engine.passCount, "pass(es)");
+}
+
+document.addEventListener("DOMContentLoaded", boot);
+</script>
+</body>
+</html>
