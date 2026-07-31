@@ -193,6 +193,69 @@
     border-radius: 5px; padding: 1px 6px;
   }
   .modal dd { color: var(--muted); margin: 0; align-self: center; }
+
+  /* Adjust drawer — right side (desktop) / bottom sheet (mobile). */
+  .stage { position: relative; }
+  .drawer {
+    position: fixed; top: 0; right: 0; z-index: 40;
+    width: 340px; max-width: 88vw; height: 100%;
+    background: var(--surface); border-left: 1px solid #ffffff16;
+    display: flex; flex-direction: column;
+    transform: translateX(100%); transition: transform .2s ease;
+    box-shadow: -12px 0 40px #0006;
+  }
+  .drawer.open { transform: none; }
+  .drawer-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 14px; border-bottom: 1px solid #ffffff12; flex: 0 0 auto;
+  }
+  .drawer-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
+  .drawer-head .seed { display: flex; align-items: center; gap: 6px; margin-left: auto; color: var(--muted); font-size: 12px; }
+  .drawer-head .seed input { width: 62px; }
+  .icon-btn {
+    appearance: none; background: #ffffff0d; border: 1px solid #ffffff20; color: var(--ink);
+    border-radius: 8px; width: 30px; height: 30px; cursor: pointer; font-size: 15px; line-height: 1;
+    display: grid; place-items: center;
+  }
+  .icon-btn:hover { background: #ffffff16; }
+  .drawer-body { overflow-y: auto; padding: 6px 14px 20px; flex: 1 1 auto; }
+  fieldset.pass {
+    border: 1px solid #ffffff14; border-radius: 9px; margin: 12px 0 0; padding: 6px 12px 12px;
+  }
+  fieldset.pass[data-bypassed="1"] .ctl { opacity: .4; pointer-events: none; }
+  fieldset.pass legend {
+    display: flex; align-items: center; gap: 8px; padding: 0 4px; font-size: 12px; font-weight: 600;
+  }
+  fieldset.pass legend .sw { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: var(--muted); font-weight: 400; }
+  .ctl { margin-top: 10px; }
+  .ctl .lab { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+  .ctl .lab .val { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .ctl.rgb .triple { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .ctl.rgb .triple .sub { font-size: 10px; color: var(--muted); text-align: center; }
+  select.field, input.field {
+    width: 100%; background: #ffffff0d; border: 1px solid #ffffff20; color: var(--ink);
+    border-radius: 7px; padding: 5px 8px; font: inherit; font-size: 13px;
+  }
+  input[type=range] {
+    -webkit-appearance: none; appearance: none; width: 100%; height: 22px; background: transparent; cursor: pointer;
+  }
+  input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: #ffffff1f; }
+  input[type=range]::-moz-range-track { height: 4px; border-radius: 2px; background: #ffffff1f; }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none; width: 14px; height: 14px; margin-top: -5px;
+    border-radius: 50%; background: var(--accent); border: 2px solid #16161a;
+  }
+  input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); border: 2px solid #16161a; }
+  input[type=range]:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--accent); outline-offset: 2px; }
+  input.toggle { width: 16px; height: 16px; accent-color: var(--accent); }
+  @media (max-width: 640px) {
+    .drawer {
+      width: 100%; max-width: 100%; height: 72vh; top: auto; bottom: 0; right: 0;
+      border-left: none; border-top: 1px solid #ffffff16;
+      border-radius: 14px 14px 0 0; transform: translateY(100%);
+    }
+    .drawer.open { transform: none; }
+  }
 </style>
 </head>
 <body>
@@ -202,6 +265,7 @@
     <span class="spacer"></span>
     <button class="btn" id="open-image" type="button"></button>
     <button class="btn" id="reload-sample" type="button"></button>
+    <button class="btn" id="adjust" type="button" hidden aria-expanded="false" aria-controls="drawer"></button>
     <button class="btn" id="save-preset" type="button" hidden></button>
     <button class="btn primary" id="export" type="button" hidden></button>
   </div>
@@ -226,6 +290,20 @@
 
   <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp" class="visually-hidden" aria-hidden="true" tabindex="-1">
   <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+  <!-- Adjust drawer (desktop) / bottom sheet (mobile). Sliders grouped per pass. -->
+  <aside class="drawer" id="drawer" aria-label="Adjust" hidden>
+    <div class="drawer-head">
+      <h2 id="drawer-title"></h2>
+      <span class="seed">
+        <label for="seed-input" id="seed-label"></label>
+        <input class="field" type="number" id="seed-input" min="0" step="1" inputmode="numeric">
+        <button class="icon-btn" id="seed-shuffle" type="button" title="Shuffle seed">⟳</button>
+      </span>
+      <button class="icon-btn" id="drawer-close" type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
 
   <div class="footer">
     <span id="engine-status"></span>
@@ -274,6 +352,24 @@ const LANG = {
     exportCancelled: "Export cancelled.",
     exportFail: "Export failed — see console.",
     close: "Close",
+    // Adjust drawer
+    adjust: "Adjust",
+    drawerTitle: "Adjust",
+    seedLabel: "Seed",
+    bypassOn: "on",
+    rgbSub: ["R", "G", "B"],
+    passNames: {
+      curve: "Film curve + cast", defocus: "Defocus", aberration: "Chromatic aberration",
+      flash: "Flash + vignette", halation: "Halation", grain: "Grain", leak: "Light leak", trim: "Trim",
+    },
+    ctl: {
+      slope: "Slope", offset: "Offset (lift)", power: "Power (gamma)", sat: "Saturation",
+      radius: "Radius", edge: "Edge bias", blend: "Blend", amount: "Amount",
+      strength: "Strength", softness: "Softness", vignette: "Vignette",
+      threshold: "Threshold", spread: "Spread", tint: "Tint", size: "Size",
+      hue: "Hue", angle: "Angle", falloff: "Falloff",
+      aspect: "Aspect", border: "Border", stamp: "Date stamp", matte: "Oval matte", none: "None",
+    },
     lookLabel: "Look",
     // Proper nouns still route through the map so the i18n scaffold stays honest (§13).
     lookNames: {
@@ -1269,6 +1365,66 @@ async function saveBlob(blob, name) {
   return "downloaded";
 }
 
+/* =========================================================================
+ * Slider panel schema (B3). Each group binds to a pass's param slice; each
+ * control to a prop (rgb:true → a vec3 shown as three R/G/B sliders). Ranges
+ * frame the useful travel around the look presets. `key` indexes the i18n
+ * ctl vocabulary so no label is hardcoded outside the lang map (§13).
+ * ========================================================================= */
+const PANEL = [
+  { pass: "curve", controls: [
+    { prop: "slope",  rgb: true, key: "slope",  min: 0.5, max: 1.5, step: 0.01 },
+    { prop: "offset", rgb: true, key: "offset", min: -0.2, max: 0.2, step: 0.005 },
+    { prop: "power",  rgb: true, key: "power",  min: 0.5, max: 1.5, step: 0.01 },
+    { prop: "sat",    key: "sat", min: 0, max: 2, step: 0.01 },
+  ] },
+  { pass: "defocus", controls: [
+    { prop: "radius", key: "radius", min: 0, max: 5, step: 0.05 },
+    { prop: "radial", key: "edge",   min: 0, max: 1, step: 0.01 },
+    { prop: "blend",  key: "blend",  min: 0, max: 1, step: 0.01 },
+  ] },
+  { pass: "aberration", controls: [
+    { prop: "amount", key: "amount", min: 0, max: 5, step: 0.05 },
+  ] },
+  { pass: "flash", controls: [
+    { prop: "strength", key: "strength", min: 0, max: 1, step: 0.01 },
+    { prop: "radius",   key: "radius",   min: 0, max: 1.2, step: 0.01 },
+    { prop: "softness", key: "softness", min: 0, max: 1, step: 0.01 },
+    { prop: "vignette", key: "vignette", min: 0, max: 1, step: 0.01 },
+  ] },
+  { pass: "halation", controls: [
+    { prop: "threshold", key: "threshold", min: 0, max: 1, step: 0.01 },
+    { prop: "strength",  key: "strength",  min: 0, max: 1.5, step: 0.01 },
+    { prop: "radius",    key: "spread",    min: 0, max: 8, step: 0.1 },
+    { prop: "tint",      rgb: true, key: "tint", min: 0, max: 1, step: 0.01 },
+  ] },
+  { pass: "grain", controls: [
+    { prop: "amount", key: "amount", min: 0, max: 0.4, step: 0.005 },
+    { prop: "size",   key: "size",   min: 1, max: 5, step: 0.1 },
+  ] },
+  { pass: "leak", controls: [
+    { prop: "strength", key: "strength", min: 0, max: 1, step: 0.01 },
+    { prop: "hue",      key: "hue",      min: 0, max: 1, step: 0.01 },
+    { prop: "angle",    key: "angle",    min: 0, max: 6.283, step: 0.01 },
+    { prop: "width",    key: "falloff",  min: 0.5, max: 8, step: 0.1 },
+  ] },
+  { pass: "trim", controls: [
+    { prop: "aspect", key: "aspect", kind: "select", options: ["none", "4:3", "3:2", "1:1"] },
+    { prop: "border", key: "border", min: 0, max: 0.1, step: 0.002 },
+    { prop: "stamp",  key: "stamp",  kind: "toggle" },
+    { prop: "matte",  key: "matte",  kind: "toggle" },
+  ] },
+];
+
+/* Focus-trap Tab within a container (drawer/modal share this shape). */
+function trapTab(e, container) {
+  const f = container.querySelectorAll("button, [href], input, select, [tabindex]:not([tabindex='-1'])");
+  if (!f.length) return;
+  const first = f[0], last = f[f.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+}
+
 /* ---- Boot ---- */
 function boot() {
   // static strings
@@ -1325,6 +1481,7 @@ function boot() {
     hero.classList.add("hidden");
     $("export").hidden = false;
     $("save-preset").hidden = false;
+    $("adjust").hidden = false;
   }
   function setSource(img) { sourceImage = img; sourceDirty = true; revealEditor(); draw(); }
   function loadSample() { sourceImage = null; sourceDirty = true; revealEditor(); draw(); }
@@ -1437,12 +1594,114 @@ function boot() {
     }
   }
 
-  // State mutations funnel through these so the strip and canvas stay in sync —
+  /* ---- Slider panel (B3): fieldset per pass, per-pass bypass, tokenised ranges.
+     panelSync[] holds one updater per control so a look/recipe change reflects
+     into every input in O(controls). ---- */
+  const drawer = $("drawer"), drawerBody = $("drawer-body"), seedInput = $("seed-input");
+  const passNames = t("passNames"), ctlNames = t("ctl"), rgbSub = t("rgbSub");
+  const panelSync = [];
+  const fmtVal = (v, step) => Number(v).toFixed(step >= 1 ? 0 : step >= 0.1 ? 1 : step >= 0.01 ? 2 : 3);
+  const getP = (pass, prop, idx) => { const v = RECIPE.params[pass][prop]; return idx == null ? v : v[idx]; };
+  const setP = (pass, prop, idx, val) => { if (idx == null) RECIPE.params[pass][prop] = val; else RECIPE.params[pass][prop][idx] = val; };
+
+  function buildPanel() {
+    drawerBody.textContent = ""; panelSync.length = 0;
+    for (const grp of PANEL) {
+      const fs = document.createElement("fieldset");
+      fs.className = "pass"; fs.dataset.pass = grp.pass;
+      const lg = document.createElement("legend");
+      const nm = document.createElement("span"); nm.textContent = passNames[grp.pass] || grp.pass; lg.appendChild(nm);
+      const sw = document.createElement("label"); sw.className = "sw";
+      const cb = document.createElement("input"); cb.type = "checkbox"; cb.className = "toggle";
+      cb.setAttribute("aria-label", (passNames[grp.pass] || grp.pass) + " " + t("bypassOn"));
+      const swt = document.createElement("span"); swt.textContent = t("bypassOn");
+      sw.appendChild(cb); sw.appendChild(swt); lg.appendChild(sw); fs.appendChild(lg);
+      cb.addEventListener("change", () => { RECIPE.params[grp.pass].bypass = !cb.checked; fs.dataset.bypassed = cb.checked ? "0" : "1"; if (hasContent) draw(); });
+      panelSync.push(() => { const on = !RECIPE.params[grp.pass].bypass; cb.checked = on; fs.dataset.bypassed = on ? "0" : "1"; });
+
+      for (const c of grp.controls) {
+        const wrap = document.createElement("div"); wrap.className = "ctl";
+        if (c.rgb) {
+          wrap.classList.add("rgb");
+          const lab = document.createElement("div"); lab.className = "lab";
+          const t1 = document.createElement("span"); t1.textContent = ctlNames[c.key] || c.key;
+          const val = document.createElement("span"); val.className = "val";
+          lab.append(t1, val); wrap.appendChild(lab);
+          const triple = document.createElement("div"); triple.className = "triple";
+          const ins = [];
+          for (let i = 0; i < 3; i++) {
+            const col = document.createElement("div");
+            const r = document.createElement("input"); r.type = "range"; r.min = c.min; r.max = c.max; r.step = c.step;
+            r.setAttribute("aria-label", (ctlNames[c.key] || c.key) + " " + rgbSub[i]);
+            const sub = document.createElement("div"); sub.className = "sub"; sub.textContent = rgbSub[i];
+            col.append(r, sub); triple.appendChild(col); ins.push(r);
+            r.addEventListener("input", () => { setP(grp.pass, c.prop, i, parseFloat(r.value)); val.textContent = ins.map((x) => fmtVal(x.value, c.step)).join(" "); if (hasContent) draw(); });
+          }
+          wrap.appendChild(triple);
+          panelSync.push(() => { for (let i = 0; i < 3; i++) ins[i].value = getP(grp.pass, c.prop, i); val.textContent = ins.map((x) => fmtVal(x.value, c.step)).join(" "); });
+        } else if (c.kind === "select") {
+          const lab = document.createElement("label"); lab.className = "lab"; lab.textContent = ctlNames[c.key] || c.key; wrap.appendChild(lab);
+          const sel = document.createElement("select"); sel.className = "field";
+          for (const opt of c.options) { const o = document.createElement("option"); o.value = opt; o.textContent = opt === "none" ? ctlNames.none : opt; sel.appendChild(o); }
+          sel.addEventListener("change", () => { RECIPE.params[grp.pass][c.prop] = sel.value; if (hasContent) draw(); });
+          wrap.appendChild(sel);
+          panelSync.push(() => { sel.value = RECIPE.params[grp.pass][c.prop]; });
+        } else if (c.kind === "toggle") {
+          const lab = document.createElement("label"); lab.style.cssText = "display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer";
+          const cbx = document.createElement("input"); cbx.type = "checkbox"; cbx.className = "toggle";
+          const span = document.createElement("span"); span.textContent = ctlNames[c.key] || c.key;
+          lab.append(cbx, span); wrap.appendChild(lab);
+          cbx.addEventListener("change", () => { RECIPE.params[grp.pass][c.prop] = cbx.checked; if (hasContent) draw(); });
+          panelSync.push(() => { cbx.checked = !!RECIPE.params[grp.pass][c.prop]; });
+        } else {
+          const lab = document.createElement("div"); lab.className = "lab";
+          const t1 = document.createElement("span"); t1.textContent = ctlNames[c.key] || c.key;
+          const val = document.createElement("span"); val.className = "val";
+          lab.append(t1, val); wrap.appendChild(lab);
+          const r = document.createElement("input"); r.type = "range"; r.min = c.min; r.max = c.max; r.step = c.step;
+          r.setAttribute("aria-label", ctlNames[c.key] || c.key);
+          r.addEventListener("input", () => { setP(grp.pass, c.prop, null, parseFloat(r.value)); val.textContent = fmtVal(r.value, c.step); if (hasContent) draw(); });
+          wrap.appendChild(r);
+          panelSync.push(() => { r.value = getP(grp.pass, c.prop, null); val.textContent = fmtVal(r.value, c.step); });
+        }
+        fs.appendChild(wrap);
+      }
+      drawerBody.appendChild(fs);
+    }
+  }
+  function syncPanel() { for (const f of panelSync) f(); seedInput.value = RECIPE.seed; }
+
+  // Seed: numeric field + deterministic shuffle (LCG step, no Math.random).
+  seedInput.addEventListener("change", () => { RECIPE.seed = Math.max(0, Math.floor(Number(seedInput.value) || 0)) >>> 0; seedInput.value = RECIPE.seed; if (hasContent) draw(); });
+  $("seed-shuffle").addEventListener("click", () => { RECIPE.seed = (RECIPE.seed * 1664525 + 1013904223) >>> 0; seedInput.value = RECIPE.seed; if (hasContent) draw(); });
+
+  // Drawer open/close with focus trap + Esc (a11y — B9).
+  const adjustBtn = $("adjust");
+  let drawerOpen = false, drawerKey = null;
+  function openDrawer() {
+    if (drawerOpen) return;
+    drawer.hidden = false; requestAnimationFrame(() => drawer.classList.add("open"));
+    drawerOpen = true; adjustBtn.setAttribute("aria-expanded", "true");
+    drawerKey = (e) => { if (e.key === "Escape") { e.preventDefault(); closeDrawer(); } else if (e.key === "Tab") trapTab(e, drawer); };
+    document.addEventListener("keydown", drawerKey, true);
+    const first = drawer.querySelector("button, input, select"); first && first.focus();
+  }
+  function closeDrawer() {
+    if (!drawerOpen) return;
+    drawer.classList.remove("open"); drawerOpen = false; adjustBtn.setAttribute("aria-expanded", "false");
+    document.removeEventListener("keydown", drawerKey, true);
+    setTimeout(() => { if (!drawerOpen) drawer.hidden = true; }, 220);
+    adjustBtn.focus();
+  }
+  adjustBtn.addEventListener("click", () => (drawerOpen ? closeDrawer() : openDrawer()));
+  $("drawer-close").addEventListener("click", closeDrawer);
+
+  // State mutations funnel through these so strip, panel, and canvas stay in sync —
   // the same one mechanism the agent face (§8) drives. Param-only changes don't
   // re-upload the source (sourceDirty stays false). Draw is deferred until there's
   // content, so choosing a look before loading an image doesn't paint behind the hero.
-  function setLook(id) { RECIPE = makeRecipe(id); syncLookStrip(); if (hasContent) draw(); }
-  function setRecipe(obj) { RECIPE = deserialiseRecipe(obj); syncLookStrip(); if (hasContent) draw(); }
+  function setLook(id) { RECIPE = makeRecipe(id); syncLookStrip(); syncPanel(); if (hasContent) draw(); }
+  function setRecipe(obj) { RECIPE = deserialiseRecipe(obj); syncLookStrip(); syncPanel(); if (hasContent) draw(); }
   function getRecipe() { return JSON.parse(serialiseRecipe(RECIPE)); }
 
   // Static strings (all through the lang map — §13)
@@ -1454,7 +1713,14 @@ function boot() {
   $("hero-open").textContent = t("heroOpen");
   $("hero-sample").textContent = t("heroSample");
 
+  // Adjust-drawer static strings + build the panel once, synced to RECIPE.
+  $("adjust").textContent = t("adjust");
+  $("drawer-title").textContent = t("drawerTitle");
+  $("seed-label").textContent = t("seedLabel");
+
   buildLookStrip();
+  buildPanel();
+  syncPanel();
   $("engine-status").textContent = t("engineReady", chainCount());   // footer live before first draw
 
   // Topbar "Sample" cycles the fixed fixture set and switches back to sample mode.
