@@ -6,12 +6,13 @@
 <!--
   CSP: nothing leaves the device. img-src allows blob:/data: for loaded photos and
   procedural fixtures; connect-src is 'none' in M0 (GA pageview-only added at M1).
-  Note: file:// does not enforce this identically to https — the header is the source
-  of truth once deployed to Cloudflare Pages.
+  frame-ancestors lives in _headers (Cloudflare Pages) — it is *ignored* in a <meta>
+  CSP and logs a console error, so it stays header-only. file:// does not enforce any
+  of this identically to https; the deployed HTTP header (_headers) is the source of truth.
 -->
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'">
-<meta name="version" content="0.0.1-m0">
+      content="default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'">
+<meta name="version" content="0.0.2-m0">
 <title>Muse</title>
 <style>
   :root {
@@ -98,6 +99,27 @@
     font: inherit;
   }
   .btn:hover { background: #ffffff16; }
+
+  /* Look strip — M0 harness selector. The M1 editor upgrades these to live
+     thumbnail previews; here they're labelled pills so looks are switchable. */
+  .lookstrip {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 16px;
+    border-bottom: 1px solid #ffffff12;
+    flex: 0 0 auto;
+    overflow-x: auto;
+  }
+  .lookstrip .lbl { color: var(--muted); font-size: 12px; margin-right: 2px; white-space: nowrap; }
+  .look {
+    appearance: none; border: 1px solid #ffffff18; background: #ffffff08;
+    color: var(--ink); border-radius: 999px; padding: 6px 14px; cursor: pointer;
+    font: inherit; white-space: nowrap;
+  }
+  .look:hover { background: #ffffff14; }
+  .look:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .look[aria-pressed="true"] {
+    border-color: var(--accent); color: var(--accent); background: #d8c08a14;
+  }
 </style>
 </head>
 <body>
@@ -107,6 +129,8 @@
     <span class="spacer"></span>
     <button class="btn" id="reload-sample" type="button"></button>
   </div>
+
+  <nav class="lookstrip" id="lookstrip" aria-label="looks"></nav>
 
   <main class="stage">
     <canvas id="view" width="1024" height="768" aria-label="image preview"></canvas>
@@ -140,8 +164,17 @@ const LANG = {
   en: {
     tagline: "90s film looks, on-device.",
     reloadSample: "New sample",
+    lookLabel: "Look",
+    // Proper nouns still route through the map so the i18n scaffold stays honest (§13).
+    lookNames: {
+      none: "Original",
+      sorrenti: "Sorrenti",
+      corinne: "Corinne Day",
+      disposable: "Disposable",
+      mall: "Mall Studio",
+    },
     engineReady: (n) => `WebGL2 ready · ${n} pass${n === 1 ? "" : "es"} in chain`,
-    version: "v0.0.1 · M0",
+    version: "v0.0.2 · M0",
     fatalTitle: "WebGL2 isn't available",
     fatalBody: "Muse renders every look with a single WebGL2 shader chain — there's no fallback path by design. Your browser or device didn't provide a WebGL2 context.",
     fatalList: [
@@ -219,9 +252,11 @@ void main() {
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
-/* Identity pass — proves the chain end-to-end for A1. Real passes land in A2–A7.
-   flipY lets us correct the CPU-uploaded source (which is top-left origin) into
-   GL's bottom-left convention exactly once, at the entry pass. */
+/* Identity blit — the engine's fallback when every pass is bypassed, so the
+   chain writes the source to screen rather than a black frame.
+   flipY corrects the CPU-uploaded source (top-left origin) into GL's bottom-left
+   convention exactly once, at the entry pass — the shared convention every pass
+   follows. */
 const IDENTITY_FRAG = `#version 300 es
 precision highp float;
 in vec2 v_uv;
@@ -233,16 +268,139 @@ void main() {
   o = texture(u_src, uv);
 }`;
 
-/* ---- Pass registry. A2–A7 push real passes here (ordered). ---- */
+/* =========================================================================
+ * Recipe = the artifact (§6). Full param JSON + seed + version. Every pass
+ * reads its slice of RECIPE.params; unimplemented passes carry their params
+ * dormant (bypass:true) so the recipe SHAPE is stable from the first pass —
+ * an exported recipe stays readable as later passes land.
+ *
+ * Colour model is ASC CDL (slope · offset · power) + saturation — the
+ * industry-standard deterministic grade, no GPL lineage. "Film curve + cast"
+ * is exactly what slope/offset/power express: offset lifts/crushes blacks,
+ * slope tilts the cast, power bends midtones, sat mutes or pushes colour.
+ * ========================================================================= */
+const VERSION_ID = "0.0.2-m0";
+const DEFAULT_SEED = 1;
+
+/* Default params for the whole 8-pass chain. Only `curve` is active in A2;
+   the rest are present-but-bypassed placeholders their passes will fill in. */
+function defaultParams() {
+  return {
+    curve:      { bypass: false, slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], sat: 1 },
+    defocus:    { bypass: true,  radius: 0 },
+    aberration: { bypass: true,  amount: 0 },
+    flash:      { bypass: true,  strength: 0, radius: 0.7, softness: 0.5, vignette: 0 },
+    halation:   { bypass: true,  threshold: 0.75, strength: 0, radius: 2, tint: [1, 0.6, 0.5] },
+    grain:      { bypass: true,  amount: 0, size: 1 },
+    leak:       { bypass: true,  strength: 0, hue: 0, angle: 0 },
+    trim:       { bypass: true,  aspect: "none", border: 0, stamp: false },
+  };
+}
+
+/* The v1 deck (§4). A2 tunes only the curve/cast slice of each — grain, flash,
+   halation etc. arrive with their passes. Chirag signs off on look quality on
+   the comparison strip; these are the starting grade, not the last word. */
+const LOOKS = [
+  { id: "none", name: "Original", params: {} },
+  { id: "sorrenti", name: "Sorrenti", params: {
+      // lifted blacks, muted sat, green-yellow midtones
+      curve: { slope: [1.02, 1.04, 0.94], offset: [0.05, 0.055, 0.03], power: [0.95, 0.92, 1.02], sat: 0.82 } } },
+  { id: "corinne", name: "Corinne Day", params: {
+      // grey cast, low contrast, cool daylight
+      curve: { slope: [0.90, 0.92, 0.95], offset: [0.06, 0.06, 0.07], power: [1.0, 1.0, 0.98], sat: 0.85 } } },
+  { id: "disposable", name: "Disposable", params: {
+      // warm, crushed shadows, oversaturated
+      curve: { slope: [1.12, 1.06, 0.92], offset: [-0.04, -0.03, -0.03], power: [1.05, 1.02, 1.05], sat: 1.22 } } },
+  { id: "mall", name: "Mall Studio", params: {
+      // warm, glowy, lifted everything
+      curve: { slope: [1.04, 1.02, 0.98], offset: [0.06, 0.05, 0.04], power: [0.92, 0.92, 0.95], sat: 1.05 } } },
+];
+
+/* Deep-merge preset overrides onto defaults. Arrays (vec3s) replace wholesale —
+   a preset gives a complete offset triple, never a partial one. */
+function deepMerge(base, over) {
+  if (Array.isArray(base) || Array.isArray(over)) return over === undefined ? base : over.slice();
+  if (base && typeof base === "object" && over && typeof over === "object") {
+    const out = {};
+    for (const k of Object.keys(base)) out[k] = deepMerge(base[k], over[k]);
+    for (const k of Object.keys(over)) if (!(k in out)) out[k] = over[k];
+    return out;
+  }
+  return over === undefined ? base : over;
+}
+
+function makeRecipe(lookId) {
+  const look = LOOKS.find((l) => l.id === lookId) || LOOKS[0];
+  return { v: VERSION_ID, look: look.id, seed: DEFAULT_SEED, params: deepMerge(defaultParams(), look.params || {}) };
+}
+
+/* Canonical, byte-stable stringify: keys sorted recursively so
+   serialise(deserialise(x)) === serialise(x) regardless of input key order.
+   This is the round-trip the M0 determinism gate checks. */
+function stableStringify(v) {
+  if (Array.isArray(v)) return "[" + v.map(stableStringify).join(",") + "]";
+  if (v && typeof v === "object") {
+    return "{" + Object.keys(v).sort().map((k) => JSON.stringify(k) + ":" + stableStringify(v[k])).join(",") + "}";
+  }
+  return JSON.stringify(v);
+}
+const serialiseRecipe = (r) => stableStringify(r);
+
+/* Normalise any recipe-shaped input into the current full shape: unknown keys
+   dropped, missing keys defaulted. Makes restore robust and output canonical. */
+function deserialiseRecipe(input) {
+  const o = typeof input === "string" ? JSON.parse(input) : (input || {});
+  return {
+    v: typeof o.v === "string" ? o.v : VERSION_ID,
+    look: typeof o.look === "string" ? o.look : "none",
+    seed: Number.isFinite(o.seed) ? o.seed : DEFAULT_SEED,
+    params: deepMerge(defaultParams(), o.params || {}),
+  };
+}
+
+/* Current edit state. Set at boot; every render reads from it. */
+let RECIPE = makeRecipe("sorrenti");
+
+/* Film curve + cast (pass 1). ASC CDL + saturation, flipY at the entry pass. */
+const CURVE_FRAG = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+uniform sampler2D u_src;
+uniform bool u_flipY;
+uniform vec3 u_slope;
+uniform vec3 u_offset;
+uniform vec3 u_power;
+uniform float u_sat;
+out vec4 o;
+void main() {
+  vec2 uv = u_flipY ? vec2(v_uv.x, 1.0 - v_uv.y) : v_uv;
+  vec4 src = texture(u_src, uv);
+  vec3 c = src.rgb;
+  // ASC CDL: out = (in * slope + offset)^power, clamped so pow() never sees < 0.
+  c = clamp(c * u_slope + u_offset, 0.0, 1.0);
+  c = pow(c, u_power);
+  // Saturation about Rec.709 luma.
+  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  c = clamp(mix(vec3(l), c, u_sat), 0.0, 1.0);
+  o = vec4(c, src.a);
+}`;
+
+/* ---- Pass registry (ordered). Later chunks push defocus → CA → flash →
+   halation → grain → leak here; trim (pass 8) is a Canvas2D compositor, not a
+   fragment pass. `paramKey` binds a pass to its slice of RECIPE.params and
+   drives per-pass bypass. ---- */
 const PASSES = [
   {
-    id: "identity",
-    name: "Passthrough",
-    enabled: true,
-    frag: IDENTITY_FRAG,
-    // set per-draw uniforms; `first` = true on the first executed pass (reads source tex)
-    uniforms(gl, prog, ctx) {
-      gl.uniform1i(gl.getUniformLocation(prog, "u_flipY"), ctx.first ? 1 : 0);
+    id: "curve",
+    name: "Film curve + cast",
+    paramKey: "curve",
+    frag: CURVE_FRAG,
+    uniforms(gl, uloc) {
+      const p = RECIPE.params.curve;
+      gl.uniform3f(uloc("u_slope"), p.slope[0], p.slope[1], p.slope[2]);
+      gl.uniform3f(uloc("u_offset"), p.offset[0], p.offset[1], p.offset[2]);
+      gl.uniform3f(uloc("u_power"), p.power[0], p.power[1], p.power[2]);
+      gl.uniform1f(uloc("u_sat"), p.sat);
     },
   },
 ];
@@ -251,8 +409,21 @@ const PASSES = [
 function makeEngine(gl) {
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); // we flip in-shader at the entry pass
 
-  // Compile every registered pass once.
-  const compiled = PASSES.map((p) => ({ def: p, prog: program(gl, p.frag, VERT) }));
+  // Compile every registered pass once, with a per-program uniform-location cache
+  // so hot draws don't re-query the driver. `uloc(name)` memoises getUniformLocation.
+  function compileEntry(def, frag) {
+    const prog = program(gl, frag, VERT);
+    const cache = new Map();
+    const uloc = (name) => {
+      if (!cache.has(name)) cache.set(name, gl.getUniformLocation(prog, name));
+      return cache.get(name);
+    };
+    return { def, prog, uloc };
+  }
+  const compiled = PASSES.map((p) => compileEntry(p, p.frag));
+  // Identity blit — used when every pass is bypassed, so the chain always writes
+  // the source to screen instead of a black frame.
+  const blit = compileEntry({ id: "__blit", uniforms: null }, IDENTITY_FRAG);
 
   // Source texture (the loaded/procedural image).
   const srcTex = gl.createTexture();
@@ -294,8 +465,18 @@ function makeEngine(gl) {
 
   const vao = gl.createVertexArray(); // empty VAO required to draw in WebGL2 core
 
+  // Which passes run this frame: registered order, minus any whose param slice
+  // is bypassed. Empty → the identity blit, so the frame is never black.
+  function activePasses() {
+    const on = compiled.filter((c) => {
+      const p = RECIPE.params[c.def.paramKey];
+      return !(p && p.bypass);
+    });
+    return on.length ? on : [blit];
+  }
+
   // Run the chain. If image given, (re)upload it. Renders final to the default
-  // framebuffer (screen). Returns nothing; A10 will read pixels off a variant.
+  // framebuffer (screen); with preserveDrawingBuffer we can snapshot() after.
   function render(image) {
     if (image) {
       const dim = uploadSource(image);
@@ -304,7 +485,7 @@ function makeEngine(gl) {
       }
       sizeTargets(dim.w, dim.h);
     }
-    const active = compiled.filter((c) => c.def.enabled);
+    const active = activePasses();
 
     gl.bindVertexArray(vao);
     gl.activeTexture(gl.TEXTURE0);
@@ -313,23 +494,26 @@ function makeEngine(gl) {
     let ping = 0;
     for (let i = 0; i < active.length; i++) {
       const c = active[i];
-      const last = i === active.length - 1;
-      const ctx = { first: i === 0, last, index: i, width: W, height: H };
+      const first = i === 0, last = i === active.length - 1;
+      const ctx = { first, last, index: i, width: W, height: H };
 
       if (last) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         gl.viewport(0, 0, canvas.width, canvas.height);
       } else {
-        const dst = targets[ping];
-        gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fbo);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, targets[ping].fbo);
         gl.viewport(0, 0, W, H);
       }
 
       gl.useProgram(c.prog);
       gl.bindTexture(gl.TEXTURE_2D, readTex);
-      gl.uniform1i(gl.getUniformLocation(c.prog, "u_src"), 0);
-      gl.uniform2f(gl.getUniformLocation(c.prog, "u_res"), W, H);
-      c.def.uniforms && c.def.uniforms(gl, c.prog, ctx);
+      gl.uniform1i(c.uloc("u_src"), 0);
+      gl.uniform2f(c.uloc("u_res"), W, H);
+      // Only the entry pass reads srcTex (top-left origin) and flips; downstream
+      // passes read FBOs already in display orientation. Null-safe on programs
+      // without the uniform.
+      gl.uniform1i(c.uloc("u_flipY"), first ? 1 : 0);
+      c.def.uniforms && c.def.uniforms(gl, c.uloc, ctx);
 
       gl.drawArrays(gl.TRIANGLES, 0, 3);
 
@@ -338,7 +522,16 @@ function makeEngine(gl) {
     gl.bindVertexArray(null);
   }
 
-  return { render, get passCount() { return compiled.filter((c) => c.def.enabled).length; } };
+  // Read the rendered frame back (RGBA8, row-major from the GL bottom-left origin).
+  // The determinism gate hashes this; orientation is irrelevant as long as it's stable.
+  function snapshot() {
+    const px = new Uint8Array(canvas.width * canvas.height * 4);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    return px;
+  }
+
+  return { render, snapshot, activeCount: () => activePasses().length };
 }
 
 /* ---- Procedural test fixture (A1): a face-ish subject with skin midtones,
@@ -413,15 +606,58 @@ function boot() {
   function draw() {
     const img = makeSampleImage(1024, 768, variant);
     engine.render(img);
-    $("engine-status").textContent = t("engineReady", engine.passCount);
+    $("engine-status").textContent = t("engineReady", engine.activeCount());
   }
+
+  // Look strip — one pill per look; active reflects RECIPE.look.
+  const strip = $("lookstrip");
+  function buildLookStrip() {
+    strip.textContent = "";
+    const lbl = document.createElement("span");
+    lbl.className = "lbl";
+    lbl.textContent = t("lookLabel");
+    strip.appendChild(lbl);
+    const names = t("lookNames");
+    for (const lk of LOOKS) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "look";
+      b.dataset.look = lk.id;
+      b.textContent = names[lk.id] || lk.name;
+      b.setAttribute("aria-pressed", String(RECIPE.look === lk.id));
+      b.addEventListener("click", () => setLook(lk.id));
+      strip.appendChild(b);
+    }
+  }
+  function syncLookStrip() {
+    for (const b of strip.querySelectorAll(".look")) {
+      b.setAttribute("aria-pressed", String(b.dataset.look === RECIPE.look));
+    }
+  }
+
+  // State mutations funnel through these so the strip and canvas stay in sync —
+  // the same one mechanism the agent face (§8) will drive at M1.
+  function setLook(id) { RECIPE = makeRecipe(id); syncLookStrip(); draw(); }
+  function setRecipe(obj) { RECIPE = deserialiseRecipe(obj); syncLookStrip(); draw(); }
+  function getRecipe() { return JSON.parse(serialiseRecipe(RECIPE)); }
+
+  buildLookStrip();
   draw();
 
   $("reload-sample").addEventListener("click", () => { variant = (variant + 1) % 6; draw(); });
 
-  // expose a minimal handle for the M0 determinism harness (A10) to drive later
-  window.__muse_m0 = { gl, engine, makeSampleImage, redraw: draw };
-  console.log("[muse] M0 harness up ·", engine.passCount, "pass(es)");
+  // M0 harness / proto agent-face handle. The determinism verifier (A10) drives
+  // exactly these entry points — one pipeline, two doors (§8).
+  window.__muse_m0 = {
+    gl, engine, makeSampleImage,
+    redraw: draw,
+    setVariant: (n) => { variant = ((n % 6) + 6) % 6; draw(); },
+    getRecipe, setRecipe, setLook,
+    serialiseRecipe, deserialiseRecipe, makeRecipe,
+    LOOKS: LOOKS.map((l) => ({ id: l.id, name: l.name })),
+    snapshot: () => engine.snapshot(),
+  };
+  console.log("[muse] M0 harness up ·", engine.activeCount(), "pass(es) · look:", RECIPE.look);
 }
 
 document.addEventListener("DOMContentLoaded", boot);
