@@ -12,7 +12,7 @@
 -->
 <meta http-equiv="Content-Security-Policy"
       content="default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'">
-<meta name="version" content="0.0.4-m0">
+<meta name="version" content="0.0.5-m0">
 <title>Muse</title>
 <style>
   :root {
@@ -174,7 +174,7 @@ const LANG = {
       mall: "Mall Studio",
     },
     engineReady: (n) => `WebGL2 ready · ${n} pass${n === 1 ? "" : "es"} in chain`,
-    version: "v0.0.4 · M0",
+    version: "v0.0.5 · M0",
     fatalTitle: "WebGL2 isn't available",
     fatalBody: "Muse renders every look with a single WebGL2 shader chain — there's no fallback path by design. Your browser or device didn't provide a WebGL2 context.",
     fatalList: [
@@ -279,7 +279,7 @@ void main() {
  * is exactly what slope/offset/power express: offset lifts/crushes blacks,
  * slope tilts the cast, power bends midtones, sat mutes or pushes colour.
  * ========================================================================= */
-const VERSION_ID = "0.0.4-m0";
+const VERSION_ID = "0.0.5-m0";
 const DEFAULT_SEED = 1;
 
 /* Default params for the whole 8-pass chain. Only `curve` is active in A2;
@@ -292,7 +292,7 @@ function defaultParams() {
     flash:      { bypass: true,  strength: 0, radius: 0.7, softness: 0.5, vignette: 0 },
     halation:   { bypass: true,  threshold: 0.75, strength: 0, radius: 2, tint: [1, 0.6, 0.5] },
     grain:      { bypass: true,  amount: 0, size: 1 },
-    leak:       { bypass: true,  strength: 0, hue: 0, angle: 0 },
+    leak:       { bypass: true,  strength: 0, hue: 0, angle: 0, width: 3 },
     trim:       { bypass: true,  aspect: "none", border: 0, stamp: false },
   };
 }
@@ -309,12 +309,14 @@ const LOOKS = [
       defocus: { bypass: false, radius: 2.0, radial: 0.85, blend: 1 },
       aberration: { bypass: false, amount: 1.4 },
       flash: { bypass: false, strength: 0.35, radius: 0.5, softness: 0.25, vignette: 0.3 },
-      halation: { bypass: false, threshold: 0.68, strength: 0.6, radius: 3, tint: [1, 0.42, 0.32] } } },
+      halation: { bypass: false, threshold: 0.68, strength: 0.6, radius: 3, tint: [1, 0.42, 0.32] },
+      grain: { bypass: false, amount: 0.14, size: 2.5 } } },   // heavy, chunky
   { id: "corinne", name: "Corinne Day", params: {
       // grey cast, low contrast, cool daylight · no flash, no defocus, minimal
       // halation (§4: minimal ≠ none)
       curve: { slope: [0.90, 0.92, 0.95], offset: [0.06, 0.06, 0.07], power: [1.0, 1.0, 0.98], sat: 0.85 },
-      halation: { bypass: false, threshold: 0.82, strength: 0.15, radius: 2, tint: [1, 0.85, 0.75] } } },
+      halation: { bypass: false, threshold: 0.82, strength: 0.15, radius: 2, tint: [1, 0.85, 0.75] },
+      grain: { bypass: false, amount: 0.09, size: 1 } } },     // medium, fine
   { id: "disposable", name: "Disposable", params: {
       // warm, crushed shadows, oversaturated · plastic-lens edge blur + fringe ·
       // harsh full-frame flash, deep vignette
@@ -322,14 +324,16 @@ const LOOKS = [
       defocus: { bypass: false, radius: 2.6, radial: 1.0, blend: 1 },
       aberration: { bypass: false, amount: 2.4 },
       flash: { bypass: false, strength: 0.5, radius: 0.8, softness: 0.45, vignette: 0.55 },
-      halation: { bypass: false, threshold: 0.75, strength: 0.35, radius: 2.5, tint: [1, 0.6, 0.5] } } },
+      halation: { bypass: false, threshold: 0.75, strength: 0.35, radius: 2.5, tint: [1, 0.6, 0.5] },
+      grain: { bypass: false, amount: 0.13, size: 1.5 } } },   // heavy
   { id: "mall", name: "Mall Studio", params: {
       // warm, glowy, lifted everything · full soft-focus (uniform, part-blended) ·
       // soft omni flash
       curve: { slope: [1.04, 1.02, 0.98], offset: [0.06, 0.05, 0.04], power: [0.92, 0.92, 0.95], sat: 1.05 },
       defocus: { bypass: false, radius: 3.2, radial: 0, blend: 0.6 },
       flash: { bypass: false, strength: 0.22, radius: 0.95, softness: 0.7, vignette: 0.12 },
-      halation: { bypass: false, threshold: 0.55, strength: 0.55, radius: 4, tint: [1, 0.9, 0.8] } } },
+      halation: { bypass: false, threshold: 0.55, strength: 0.55, radius: 4, tint: [1, 0.9, 0.8] },
+      grain: { bypass: false, amount: 0.05, size: 1 } } },     // light
 ];
 
 /* Deep-merge preset overrides onto defaults. Arrays (vec3s) replace wholesale —
@@ -543,6 +547,80 @@ void main() {
   o = vec4(1.0 - (1.0 - base.rgb) * (1.0 - glow), base.a);   /* screen blend */
 }`;
 
+/* Grain (pass 6) — the seeded pass. PCG hash on integer cell coords + seed:
+   highp uint ops are bit-exact, so same params + same seed + same image =
+   identical pixels — the M0 determinism contract, with no reliance on GPU
+   trig precision. Luminance-weighted (peaks in midtones, floored so extremes
+   still carry some), mono, additive; `size` scales cell chunkiness. */
+const GRAIN_FRAG = `#version 300 es
+precision highp float;
+precision highp int;
+in vec2 v_uv;
+uniform sampler2D u_src;
+uniform vec2 u_res;
+uniform bool u_flipY;
+uniform float u_amount;
+uniform float u_size;
+uniform uint u_seed;
+out vec4 o;
+uint pcg(uint v) {
+  uint state = v * 747796405u + 2891336453u;
+  uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+  return (word >> 22u) ^ word;
+}
+void main() {
+  vec2 uv = u_flipY ? vec2(v_uv.x, 1.0 - v_uv.y) : v_uv;
+  vec4 src = texture(u_src, uv);
+  vec3 c = src.rgb;
+  uvec2 cell = uvec2(floor(gl_FragCoord.xy / max(u_size, 1.0)));
+  uint h = pcg(cell.x ^ pcg(cell.y ^ u_seed));
+  float n = float(h) * (1.0 / 4294967295.0) - 0.5;
+  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  float w = mix(0.35, 1.0, 4.0 * l * (1.0 - l));
+  o = vec4(clamp(c + n * u_amount * w, 0.0, 1.0), src.a);
+}`;
+
+/* Light leak (pass 7, optional — no base look ships one; it's a slider at M1).
+   A soft glow entering from off-frame: `angle` picks the entry direction
+   (radians, 0 = right edge, counter-clockwise, y-up), the seed jitters the
+   entry point and reach, `hue` colours it, `width` sets the falloff, and it
+   screens over the frame. Position uses v_uv (output space) like flash —
+   only texture reads flip. */
+const LEAK_FRAG = `#version 300 es
+precision highp float;
+precision highp int;
+in vec2 v_uv;
+uniform sampler2D u_src;
+uniform vec2 u_res;
+uniform bool u_flipY;
+uniform float u_strength;
+uniform float u_hue;
+uniform float u_angle;
+uniform float u_width;
+uniform uint u_seed;
+out vec4 o;
+uint pcg(uint v) {
+  uint state = v * 747796405u + 2891336453u;
+  uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+  return (word >> 22u) ^ word;
+}
+float srand(uint s, uint k) { return float(pcg(s ^ (k * 2654435769u))) * (1.0 / 4294967295.0); }
+vec3 hue2rgb(float h) {
+  vec3 k = mod(vec3(5.0, 3.0, 1.0) + h * 6.0, 6.0);
+  return 1.0 - clamp(min(k, 4.0 - k), 0.0, 1.0);
+}
+void main() {
+  vec2 uv = u_flipY ? vec2(v_uv.x, 1.0 - v_uv.y) : v_uv;
+  vec4 src = texture(u_src, uv);
+  vec2 p = (v_uv - 0.5) * vec2(u_res.x / u_res.y, 1.0) * 2.0;
+  float ja = (srand(u_seed, 1u) - 0.5) * 0.6;
+  float jr = 0.9 + (srand(u_seed, 2u) - 0.5) * 0.3;
+  vec2 P = vec2(cos(u_angle + ja), sin(u_angle + ja)) * jr;
+  float d = length(p - P);
+  vec3 leak = clamp(hue2rgb(u_hue) * exp(-d * d * u_width) * u_strength, 0.0, 1.0);
+  o = vec4(1.0 - (1.0 - src.rgb) * (1.0 - leak), src.a);   /* screen blend */
+}`;
+
 /* ---- Pass registry (ordered per §5: curve → defocus → CA → flash → halation
    → grain → leak; trim (pass 8) is a Canvas2D compositor, not a fragment pass).
    `paramKey` binds a pass to its slice of RECIPE.params and drives per-pass
@@ -618,6 +696,32 @@ const PASSES = [
           gl.uniform3f(uloc("u_tint"), p.tint[0], p.tint[1], p.tint[2]);
         } },
     ],
+  },
+  {
+    id: "grain",
+    name: "Grain",
+    paramKey: "grain",
+    frag: GRAIN_FRAG,
+    uniforms(gl, uloc) {
+      const p = RECIPE.params.grain;
+      gl.uniform1f(uloc("u_amount"), p.amount);
+      gl.uniform1f(uloc("u_size"), p.size);
+      gl.uniform1ui(uloc("u_seed"), RECIPE.seed >>> 0);
+    },
+  },
+  {
+    id: "leak",
+    name: "Light leak",
+    paramKey: "leak",
+    frag: LEAK_FRAG,
+    uniforms(gl, uloc) {
+      const p = RECIPE.params.leak;
+      gl.uniform1f(uloc("u_strength"), p.strength);
+      gl.uniform1f(uloc("u_hue"), p.hue);
+      gl.uniform1f(uloc("u_angle"), p.angle);
+      gl.uniform1f(uloc("u_width"), p.width);
+      gl.uniform1ui(uloc("u_seed"), RECIPE.seed >>> 0);
+    },
   },
 ];
 
