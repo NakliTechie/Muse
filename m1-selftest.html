@@ -138,6 +138,48 @@ async function run() {
       listed && restored ? "saved, listed, applied → recipe equal" : `listed:${listed} restored:${restored}`);
   }
 
+  // ---- Journey checks (walkthrough 2026-07-31): the flows a real user drives ----
+  { // 6) the real Export button → recipe-embedded PNG (native picker stubbed)
+    ed.loadSample(); ed.setLook("sepia");
+    let cap = null;
+    w.showSaveFilePicker = async () => ({ createWritable: async () => ({ write: async (b) => { cap = b; }, close: async () => {} }) });
+    w.document.getElementById("export").click();
+    for (let i = 0; i < 40 && !cap; i++) await new Promise((r) => setTimeout(r, 50));
+    const pb = cap ? new Uint8Array(await cap.arrayBuffer()) : null;
+    const prec = pb ? JSON.parse(readRecipeFromPNG(pb) || "{}") : {};
+    addRow("Export button → recipe-embedded PNG", !!cap && pb[0] === 0x89 && prec.look === "sepia",
+      cap ? `${pb.length}B PNG · embedded look=${prec.look}` : "no blob captured");
+  }
+  { // 7) restore-on-drop: dropping an exported image offers + applies its recipe
+    ed.loadSample(); ed.setLook("cyanotype");
+    let cap = null;
+    w.showSaveFilePicker = async () => ({ createWritable: async () => ({ write: async (b) => { cap = b; }, close: async () => {} }) });
+    w.document.getElementById("export").click();
+    for (let i = 0; i < 40 && !cap; i++) await new Promise((r) => setTimeout(r, 50));
+    const file = new w.File([new Uint8Array(await cap.arrayBuffer())], "r.png", { type: "image/png" });
+    ed.setLook("kodachrome");
+    await ed.loadFile(file);
+    await new Promise((r) => setTimeout(r, 90));
+    const m = w.document.querySelector(".modal-scrim");
+    if (m) m.querySelector(".btn.primary").click();
+    await new Promise((r) => setTimeout(r, 130));
+    addRow("Restore-on-drop applies embedded recipe", muse.getRecipe().look === "cyanotype",
+      "exported cyanotype over kodachrome → restored " + muse.getRecipe().look);
+  }
+  { // 8) unsupported file → in-app error toast (never native, never silent)
+    await ed.loadFile(new w.File(["x"], "n.txt", { type: "text/plain" }));
+    await new Promise((r) => setTimeout(r, 70));
+    const toast = [...w.document.querySelectorAll(".toast")].pop();   // newest, not a stale one
+    addRow("Unsupported file → in-app error toast", !!toast && /supported image/i.test(toast.textContent),
+      toast ? toast.textContent.slice(0, 48) : "no toast");
+  }
+  { // 9) CC0 sample gallery present + wired to embedded data-URIs
+    const gal = w.document.querySelectorAll("#hero-samples .sample");
+    const withImg = [...gal].filter((b) => b.querySelector("img[src^='data:image']")).length;
+    addRow("CC0 sample gallery present", gal.length >= 1 && withImg === gal.length,
+      `${gal.length} embedded CC0 sample thumbnails`);
+  }
+
   const allPass = rows.every((r) => r.ok);
   $("banner").dataset.state = allPass ? "pass" : "fail";
   $("banner").textContent = allPass ? `PASS — all ${rows.length} checks` : "FAIL — see rows";
