@@ -57,9 +57,11 @@
   .stage {
     flex: 1 1 auto;
     position: relative;
-    display: grid;
-    place-items: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     min-height: 0;
+    overflow: hidden;   /* belt-and-braces: never spill onto the strip/action bar */
     padding: 8px 10px;
   }
   #view {
@@ -437,10 +439,12 @@ const LANG = {
     lookNames: {
       none: "Original",
       daguerreotype: "Daguerreotype",
+      ambrotype: "Ambrotype",
       tintype: "Tintype",
       sepia: "Sepia",
       cyanotype: "Cyanotype",
       autochrome: "Autochrome",
+      technicolor: "Technicolor",
       kodachrome: "Kodachrome",
       polaroid: "Polaroid",
       eighties: "'80s Flash",
@@ -448,7 +452,9 @@ const LANG = {
       corinne: "Corinne Day",
       disposable: "Disposable",
       mall: "Mall Studio",
+      crossprocess: "Cross-process",
       digicam: "Digicam",
+      lomo: "Lomo",
       phonecam: "Early Phone",
     },
     engineReady: (n) => `WebGL2 ready · ${n} pass${n === 1 ? "" : "es"} in chain`,
@@ -591,6 +597,13 @@ const LOOKS = [
       defocus: { bypass: false, radius: 1.4, radial: 1.0, blend: 1 },
       flash: { bypass: false, strength: 0, radius: 0.6, softness: 0.4, vignette: 0.65 },
       trim: { bypass: false, aspect: "4:3", border: 0.02, stamp: false, matte: true } } },
+  { id: "ambrotype", name: "Ambrotype", era: "1850s", params: {
+      // dark warm glass plate — deeper & warmer than the daguerreotype's cool silver
+      curve: { slope: [1.1, 1.1, 1.1], offset: [-0.05, -0.05, -0.05], power: [1.22, 1.22, 1.22], sat: 0,
+               tone: { lo: [0.05, 0.05, 0.06], hi: [0.82, 0.79, 0.72], amt: 1.0 } },   // dim warm silver
+      defocus: { bypass: false, radius: 1.2, radial: 0.9, blend: 0.9 },
+      flash: { bypass: false, strength: 0, radius: 0.6, softness: 0.4, vignette: 0.72 },
+      trim: { bypass: false, aspect: "4:3", border: 0.02, stamp: false, matte: true } } },
   { id: "tintype", name: "Tintype", era: "1860s", params: {
       // warm-brown toned metal plate, hard contrast, edge fall-off, soft plate imperfection
       curve: { slope: [1.08, 1.08, 1.08], offset: [-0.02, -0.02, -0.02], power: [1.12, 1.12, 1.12], sat: 0,
@@ -619,6 +632,13 @@ const LOOKS = [
       defocus: { bypass: false, radius: 2.4, radial: 0, blend: 0.55 },
       halation: { bypass: false, threshold: 0.7, strength: 0.3, radius: 3, tint: [1, 0.85, 0.7] },
       grain: { bypass: false, amount: 0.07, size: 1.2 },
+      trim: { bypass: false, aspect: "4:3", border: 0, stamp: false, matte: false } } },
+  { id: "technicolor", name: "Technicolor", era: "1930s", params: {
+      // 3-strip hyper-saturation: rich reds, deep cyans, glowing highlights, sharp
+      curve: { slope: [1.08, 1.0, 1.05], offset: [0, 0, 0], power: [1.06, 1.06, 1.06], sat: 1.5 },
+      halation: { bypass: false, threshold: 0.6, strength: 0.4, radius: 4, tint: [1, 0.8, 0.7] },
+      flash: { bypass: false, strength: 0, radius: 0.7, softness: 0.5, vignette: 0.15 },
+      grain: { bypass: false, amount: 0.04, size: 1 },
       trim: { bypass: false, aspect: "4:3", border: 0, stamp: false, matte: false } } },
   { id: "kodachrome", name: "Kodachrome", era: "1950s", params: {
       // rich saturated warm slide film, deep blacks, fine grain
@@ -681,6 +701,12 @@ const LOOKS = [
       halation: { bypass: false, threshold: 0.55, strength: 0.55, radius: 4, tint: [1, 0.9, 0.8] },
       grain: { bypass: false, amount: 0.05, size: 1 },         // light
       trim: { bypass: false, aspect: "4:3", border: 0, stamp: false, matte: false } } },  // matte optional, off by default
+  { id: "crossprocess", name: "Cross-process", era: "1990s", params: {
+      // E6-in-C41: cyan-green shadows, yellow highlights, punchy contrast + saturation
+      curve: { slope: [1.1, 1.08, 0.85], offset: [-0.03, 0.04, 0.02], power: [1.1, 1.08, 1.12], sat: 1.3 },
+      flash: { bypass: false, strength: 0, radius: 0.7, softness: 0.5, vignette: 0.3 },
+      grain: { bypass: false, amount: 0.05, size: 1 },
+      trim: { bypass: false, aspect: "4:3", border: 0, stamp: false, matte: false } } },
 
   // ---- Digital era (going further, per Chirag) ----
   { id: "digicam", name: "Digicam", era: "2000s", params: {
@@ -690,6 +716,15 @@ const LOOKS = [
       flash: { bypass: false, strength: 0.42, radius: 0.5, softness: 0.2, vignette: 0.35 },
       grain: { bypass: false, amount: 0.03, size: 1 },
       trim: { bypass: false, aspect: "4:3", border: 0, stamp: true, matte: false } } },
+  { id: "lomo", name: "Lomo", era: "2000s", params: {
+      // LC-A cult look: crushed saturated colour, heavy vignette, fringe, and a leak
+      curve: { slope: [1.06, 1.02, 0.95], offset: [-0.02, -0.02, -0.02], power: [1.1, 1.1, 1.1], sat: 1.35 },
+      defocus: { bypass: false, radius: 1.5, radial: 1.0, blend: 0.7 },
+      aberration: { bypass: false, amount: 1.5 },
+      flash: { bypass: false, strength: 0, radius: 0.65, softness: 0.4, vignette: 0.6 },
+      leak: { bypass: false, strength: 0.3, hue: 0.08, angle: 0.6, width: 2.5 },
+      grain: { bypass: false, amount: 0.07, size: 1.2 },
+      trim: { bypass: false, aspect: "4:3", border: 0, stamp: false, matte: false } } },
   { id: "phonecam", name: "Early Phone", era: "2010s", params: {
       // low-fi first-gen phone: washed, green-cool cast, noisy, soft, low dynamic range
       curve: { slope: [0.98, 1.03, 1.0], offset: [0.04, 0.05, 0.05], power: [0.95, 0.95, 0.96], sat: 0.88 },
