@@ -362,6 +362,10 @@ const LANG = {
     exportCancelled: "Export cancelled.",
     exportFail: "Export failed — see console.",
     close: "Close",
+    // a11y attribute strings (routed through the map so locales can override)
+    a11yPreview: "Image preview",
+    a11yLooks: "Looks",
+    shuffleSeed: "Shuffle seed",
     // Help + intro
     help: "Help",
     helpBtn: "?",
@@ -1846,6 +1850,14 @@ function boot() {
   $("drawer-title").textContent = t("drawerTitle");
   $("seed-label").textContent = t("seedLabel");
   $("help").textContent = t("helpBtn");
+  // a11y attribute strings through the map (locale-overridable — §13)
+  $("view").setAttribute("aria-label", t("a11yPreview"));
+  $("lookstrip").setAttribute("aria-label", t("a11yLooks"));
+  $("drawer").setAttribute("aria-label", t("adjust"));
+  $("drawer-close").setAttribute("aria-label", t("close"));
+  $("seed-shuffle").setAttribute("title", t("shuffleSeed"));
+  $("help").setAttribute("aria-label", t("help"));
+  $("help").setAttribute("title", t("help"));
 
   buildLookStrip();
   buildPanel();
@@ -1925,6 +1937,9 @@ function boot() {
     snapshot: () => view.getContext("2d").getImageData(0, 0, view.width, view.height).data,
   };
 
+  // i18n coverage hook for the M1 self-test: the live set of defined lang keys.
+  window.__muse_i18n = { locale: LOCALE, keys: Object.keys(LANG[LOCALE] || LANG.en) };
+
   /* ---- Agent face (§8): window.muse, gated behind muse.dev, off by default.
      Same pipeline the UI drives — one mechanism, two doors — and the headless
      test surface for M1. applyLook renders an arbitrary source off to the side
@@ -1977,7 +1992,14 @@ function boot() {
   // and the M1 self-test to drive. Kept separate from the frozen M0 face above.
   boot.editor = { loadFile, loadSample, setSource, setLook, setRecipe, getRecipe, draw,
                   toast, revealEditor, get hasContent() { return hasContent; },
-                  markDirty: () => { sourceDirty = true; }, chainCount, view };
+                  markDirty: () => { sourceDirty = true; }, chainCount, view,
+                  // Preset hooks for the M1 self-test (same code the UI drives).
+                  presetAPI: {
+                    save(name) { presets.push({ name, recipe: getRecipe() }); savePresets(); buildLookStrip(); syncLookStrip(); refreshThumbs(); return presets.length; },
+                    list() { return presets.map((p) => p.name); },
+                    apply(i) { setRecipe(presets[i].recipe); },
+                    clear() { presets.length = 0; savePresets(); buildLookStrip(); syncLookStrip(); },
+                  } };
 
   maybeShowIntro();
   console.log("[muse] editor up ·", chainCount(), "pass(es) · look:", RECIPE.look);
