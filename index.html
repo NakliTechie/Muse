@@ -40,22 +40,26 @@
     flex-direction: column;
     overflow: hidden;
   }
-  .topbar {
-    display: flex; align-items: center; gap: var(--gap);
-    padding: 10px 16px;
-    border-bottom: 1px solid #ffffff12;
+  /* Mobile-first, Instagram-shaped: slim app bar on top, full-bleed image, look
+     strip + thumb-reachable action bar pinned to the bottom. Desktop just widens. */
+  .appbar {
+    display: flex; align-items: center; gap: 10px;
+    padding: max(8px, env(safe-area-inset-top)) 14px 8px;
     flex: 0 0 auto;
   }
   .brand { font-weight: 600; letter-spacing: .02em; }
   .brand .dot { color: var(--accent); }
   .spacer { flex: 1 1 auto; }
+  .appbar .status { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .appbar .ver { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  @media (max-width: 620px) { .appbar .status { display: none; } }   /* keep the phone bar clean */
   .stage {
     flex: 1 1 auto;
     position: relative;
     display: grid;
     place-items: center;
     min-height: 0;
-    padding: var(--gap);
+    padding: 8px 10px;
   }
   #view {
     max-width: 100%;
@@ -64,16 +68,19 @@
     box-shadow: 0 6px 30px #0008;
     image-rendering: auto;
     background: #000;
+    touch-action: none;   /* press-and-hold before/after isn't a scroll gesture */
   }
-  .footer {
+  /* Bottom action bar — primary reach zone. Buttons ≥44px tall (touch target). */
+  .actionbar {
     flex: 0 0 auto;
-    display: flex; align-items: center; gap: 10px;
-    padding: 8px 16px;
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
     border-top: 1px solid #ffffff12;
-    color: var(--muted);
-    font-size: 12px;
+    overflow-x: auto;
   }
-  .footer .ver { font-variant-numeric: tabular-nums; }
+  .actionbar .btn { min-height: 44px; flex: 0 0 auto; }
+  .actionbar #export { border-color: var(--accent); }
+  @media (min-width: 760px) { .actionbar #export { margin-left: auto; } }  /* park Export right on desktop */
 
   /* Full-viewport WebGL2-unavailable error state — no partial UI behind it. */
   .fatal {
@@ -102,16 +109,18 @@
   }
   .btn:hover { background: #ffffff16; }
 
-  /* Look strip — M0 harness selector. The M1 editor upgrades these to live
-     thumbnail previews; here they're labelled pills so looks are switchable. */
+  /* Look strip — bottom-pinned horizontal scroller (Instagram filter row). Live
+     thumbnail previews per look; name-forward under each thumb. */
   .lookstrip {
-    display: flex; align-items: center; gap: 8px;
-    padding: 8px 16px;
-    border-bottom: 1px solid #ffffff12;
+    display: flex; align-items: flex-end; gap: 8px;
+    padding: 8px 12px;
     flex: 0 0 auto;
     overflow-x: auto;
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
   }
-  .lookstrip .lbl { color: var(--muted); font-size: 12px; margin-right: 2px; white-space: nowrap; }
+  .lookstrip .look { scroll-snap-align: start; }
+  .lookstrip .lbl { display: none; }   /* the thumbnails name themselves */
   .look {
     appearance: none; border: 1px solid #ffffff18; background: #ffffff08;
     color: var(--ink); border-radius: 999px; padding: 6px 14px; cursor: pointer;
@@ -203,15 +212,18 @@
   }
   .modal dd { color: var(--muted); margin: 0; align-self: center; }
 
-  /* Adjust drawer — right side (desktop) / bottom sheet (mobile). */
+  /* Adjust — bottom sheet by default (mobile-first); a right-side drawer on wide
+     screens. Base is the phone shape; the media query is the desktop enhancement. */
   .stage { position: relative; }
   .drawer {
-    position: fixed; top: 0; right: 0; z-index: 40;
-    width: 340px; max-width: 88vw; height: 100%;
-    background: var(--surface); border-left: 1px solid #ffffff16;
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+    width: 100%; height: 74vh;
+    background: var(--surface); border-top: 1px solid #ffffff16;
+    border-radius: 16px 16px 0 0;
     display: flex; flex-direction: column;
-    transform: translateX(100%); transition: transform .2s ease;
-    box-shadow: -12px 0 40px #0006;
+    transform: translateY(100%); transition: transform .22s ease;
+    box-shadow: 0 -12px 40px #0006;
+    padding-bottom: env(safe-area-inset-bottom);
   }
   .drawer.open { transform: none; }
   .drawer-head {
@@ -257,30 +269,29 @@
   input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); border: 2px solid #16161a; }
   input[type=range]:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--accent); outline-offset: 2px; }
   input.toggle { width: 16px; height: 16px; accent-color: var(--accent); }
-  @media (max-width: 640px) {
+  /* Desktop enhancement: the bottom sheet becomes a right-side drawer. */
+  @media (min-width: 760px) {
     .drawer {
-      width: 100%; max-width: 100%; height: 72vh; top: auto; bottom: 0; right: 0;
-      border-left: none; border-top: 1px solid #ffffff16;
-      border-radius: 14px 14px 0 0; transform: translateY(100%);
+      top: 0; bottom: 0; right: 0; left: auto;
+      width: 360px; height: 100%;
+      border-top: none; border-left: 1px solid #ffffff16;
+      border-radius: 0; transform: translateX(100%);
+      box-shadow: -12px 0 40px #0006;
     }
     .drawer.open { transform: none; }
+    /* Roomier chrome on desktop */
+    .stage { padding: var(--gap); }
   }
 </style>
 </head>
 <body>
-  <div class="topbar">
+  <header class="appbar">
     <span class="brand">Muse<span class="dot">.</span></span>
-    <span class="hint" id="tagline"></span>
+    <span class="status" id="engine-status"></span>
     <span class="spacer"></span>
-    <button class="btn" id="open-image" type="button"></button>
-    <button class="btn" id="reload-sample" type="button"></button>
-    <button class="btn" id="adjust" type="button" hidden aria-expanded="false" aria-controls="drawer"></button>
-    <button class="btn" id="save-preset" type="button" hidden></button>
-    <button class="btn primary" id="export" type="button" hidden></button>
-    <button class="btn" id="help" type="button" title="Help (?)" aria-label="Help"></button>
-  </div>
-
-  <nav class="lookstrip" id="lookstrip" aria-label="looks"></nav>
+    <span class="ver" id="ver"></span>
+    <button class="btn" id="help" type="button"></button>
+  </header>
 
   <main class="stage">
     <canvas id="view" width="1024" height="768" aria-label="image preview"></canvas>
@@ -297,6 +308,18 @@
       </div>
     </div>
   </main>
+
+  <!-- Look strip: bottom-pinned filter row (Instagram-shaped), thumb-reachable. -->
+  <nav class="lookstrip" id="lookstrip" aria-label="looks"></nav>
+
+  <!-- Primary action bar: bottom reach zone, ≥44px touch targets. -->
+  <div class="actionbar">
+    <button class="btn" id="open-image" type="button"></button>
+    <button class="btn" id="reload-sample" type="button"></button>
+    <button class="btn" id="adjust" type="button" hidden aria-expanded="false" aria-controls="drawer"></button>
+    <button class="btn" id="save-preset" type="button" hidden></button>
+    <button class="btn primary" id="export" type="button" hidden></button>
+  </div>
 
   <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp" class="visually-hidden" aria-hidden="true" tabindex="-1">
   <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
@@ -1480,7 +1503,6 @@ const STORE_KEYS = { presets: "muse.presets", lang: "muse.lang", intro: "muse.in
 /* ---- Boot ---- */
 function boot() {
   // static strings
-  $("tagline").textContent = t("tagline");
   $("reload-sample").textContent = t("reloadSample");
   $("ver").textContent = t("version");
 
