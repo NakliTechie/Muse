@@ -5,3 +5,6 @@ Thumbs.db
 
 # Working notes (scaffold + session planning) — not shipped
 plan/
+
+# autopilot worktrees
+.worktrees/
