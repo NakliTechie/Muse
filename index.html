@@ -12,7 +12,7 @@
 -->
 <meta http-equiv="Content-Security-Policy"
       content="default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'">
-<meta name="version" content="0.0.7-m0">
+<meta name="version" content="0.1.0-m1">
 <!-- Inline favicon: no favicon.ico request, no 404 in console (gate: zero errors) -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230b0b0d'/%3E%3Ccircle cx='8' cy='8' r='4.5' fill='none' stroke='%23d8c08a' stroke-width='1.6'/%3E%3Ccircle cx='8' cy='8' r='1.6' fill='%23d8c08a'/%3E%3C/svg%3E">
 <title>Muse</title>
@@ -268,6 +268,7 @@
     <button class="btn" id="adjust" type="button" hidden aria-expanded="false" aria-controls="drawer"></button>
     <button class="btn" id="save-preset" type="button" hidden></button>
     <button class="btn primary" id="export" type="button" hidden></button>
+    <button class="btn" id="help" type="button" title="Help (?)" aria-label="Help"></button>
   </div>
 
   <nav class="lookstrip" id="lookstrip" aria-label="looks"></nav>
@@ -352,6 +353,22 @@ const LANG = {
     exportCancelled: "Export cancelled.",
     exportFail: "Export failed — see console.",
     close: "Close",
+    // Help + intro
+    help: "Help",
+    helpBtn: "?",
+    helpTitle: "Keyboard & privacy",
+    privacyLine: "Your photos never leave your device — there is no upload. You can verify it: open your browser's Network tab and watch it stay silent while you edit and export.",
+    shortcuts: [
+      ["Space (hold)", "Show the original — before / after"],
+      ["1 – 4", "Sorrenti · Corinne Day · Disposable · Mall Studio"],
+      ["0", "Original (no look)"],
+      ["⌘ / Ctrl + S", "Export with recipe embedded"],
+      ["?", "This help"],
+      ["Esc", "Close the panel or a dialog"],
+    ],
+    gotIt: "Got it",
+    introTitle: "Welcome to Muse",
+    introBody: "Drop a photo, pick a 90s film look, tune it with the deep sliders, and export. Everything runs on your device — nothing is uploaded. Every export carries its recipe, so dropping the image back in restores the exact edit.",
     // Adjust drawer
     adjust: "Adjust",
     drawerTitle: "Adjust",
@@ -380,7 +397,7 @@ const LANG = {
       mall: "Mall Studio",
     },
     engineReady: (n) => `WebGL2 ready · ${n} pass${n === 1 ? "" : "es"} in chain`,
-    version: "v0.0.7 · M0",
+    version: "v0.1.0 · M1",
     fatalTitle: "WebGL2 isn't available",
     fatalBody: "Muse renders every look with a single WebGL2 shader chain — there's no fallback path by design. Your browser or device didn't provide a WebGL2 context.",
     fatalList: [
@@ -486,7 +503,7 @@ void main() {
  * is exactly what slope/offset/power express: offset lifts/crushes blacks,
  * slope tilts the cast, power bends midtones, sat mutes or pushes colour.
  * ========================================================================= */
-const VERSION_ID = "0.0.7-m0";
+const VERSION_ID = "0.1.0-m1";
 const DEFAULT_SEED = 1;
 
 /* Default params for the whole 8-pass chain. Only `curve` is active in A2;
@@ -1425,6 +1442,15 @@ function trapTab(e, container) {
   else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
 }
 
+/* localStorage wrapper — only presets/lang/intro/dev live here (§5); never image
+   data. Wrapped so a locked-down storage (private mode, file://) fails soft. */
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch (_) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (_) {} },
+  del(k) { try { localStorage.removeItem(k); } catch (_) {} },
+};
+const STORE_KEYS = { presets: "muse.presets", lang: "muse.lang", intro: "muse.intro", dev: "muse.dev" };
+
 /* ---- Boot ---- */
 function boot() {
   // static strings
@@ -1717,11 +1743,63 @@ function boot() {
   $("adjust").textContent = t("adjust");
   $("drawer-title").textContent = t("drawerTitle");
   $("seed-label").textContent = t("seedLabel");
+  $("help").textContent = t("helpBtn");
 
   buildLookStrip();
   buildPanel();
   syncPanel();
   $("engine-status").textContent = t("engineReady", chainCount());   // footer live before first draw
+
+  /* ---- Before / after (B4): hold shows the untouched source ---- */
+  let peeking = false;
+  function drawOriginal() {
+    const src = currentSource();
+    const vx = view.getContext("2d");
+    vx.clearRect(0, 0, view.width, view.height);
+    vx.drawImage(src, 0, 0, view.width, view.height);
+  }
+  function peek(on) {
+    if (!hasContent) return;
+    if (on && !peeking) { peeking = true; drawOriginal(); }
+    else if (!on && peeking) { peeking = false; draw(); }
+  }
+  view.addEventListener("pointerdown", (e) => { if (e.button === 0) peek(true); });
+  for (const ev of ["pointerup", "pointerleave", "pointercancel"]) view.addEventListener(ev, () => peek(false));
+
+  /* ---- Help + intro modals (B8) ---- */
+  async function showHelp() {
+    const node = document.createElement("div");
+    const p = document.createElement("p"); p.textContent = t("privacyLine"); node.appendChild(p);
+    const dl = document.createElement("dl");
+    for (const [k, d] of t("shortcuts")) {
+      const dt = document.createElement("dt"); const kbd = document.createElement("kbd"); kbd.textContent = k; dt.appendChild(kbd);
+      const dd = document.createElement("dd"); dd.textContent = d;
+      dl.append(dt, dd);
+    }
+    node.appendChild(dl);
+    await openModal({ title: t("helpTitle"), node, actions: [{ label: t("close"), value: true, primary: true }], wide: true });
+  }
+  $("help").addEventListener("click", showHelp);
+
+  async function maybeShowIntro() {
+    if (store.get(STORE_KEYS.intro)) return;
+    await openModal({ title: t("introTitle"), body: t("introBody"), actions: [{ label: t("gotIt"), value: true, primary: true }] });
+    store.set(STORE_KEYS.intro, "1");
+  }
+
+  /* ---- Keyboard shortcuts (B9). Ignored while typing or a dialog is open,
+     except Space (before/after) and the always-safe combos. ---- */
+  const LOOK_KEYS = { "1": "sorrenti", "2": "corinne", "3": "disposable", "4": "mall", "0": "none" };
+  const typingIn = (el) => el && (el.tagName === "INPUT" || el.tagName === "SELECT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+  const modalOpen = () => !!document.querySelector(".modal-scrim");
+  document.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && (e.key === "s" || e.key === "S")) { e.preventDefault(); if (hasContent) exportImage(); return; }
+    if (typingIn(document.activeElement) || modalOpen()) return;   // Esc handled by drawer/modal owners
+    if (e.key === " " && !e.repeat) { e.preventDefault(); peek(true); return; }
+    if (e.key === "?" || (e.shiftKey && e.key === "/")) { e.preventDefault(); showHelp(); return; }
+    if (e.key in LOOK_KEYS) { e.preventDefault(); if (hasContent) setLook(LOOK_KEYS[e.key]); return; }
+  });
+  document.addEventListener("keyup", (e) => { if (e.key === " ") peek(false); });
 
   // Topbar "Sample" cycles the fixed fixture set and switches back to sample mode.
   $("reload-sample").addEventListener("click", () => {
@@ -1751,6 +1829,7 @@ function boot() {
                   toast, revealEditor, get hasContent() { return hasContent; },
                   markDirty: () => { sourceDirty = true; }, chainCount, view };
 
+  maybeShowIntro();
   console.log("[muse] editor up ·", chainCount(), "pass(es) · look:", RECIPE.look);
 }
 
