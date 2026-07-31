@@ -1,0 +1,7 @@
+# OS junk
+.DS_Store
+Thumbs.db
+*.swp
+
+# Working notes (scaffold + session planning) — not shipped
+plan/
