@@ -12,7 +12,7 @@
 -->
 <meta http-equiv="Content-Security-Policy"
       content="default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'">
-<meta name="version" content="0.0.2-m0">
+<meta name="version" content="0.0.3-m0">
 <title>Muse</title>
 <style>
   :root {
@@ -174,7 +174,7 @@ const LANG = {
       mall: "Mall Studio",
     },
     engineReady: (n) => `WebGL2 ready · ${n} pass${n === 1 ? "" : "es"} in chain`,
-    version: "v0.0.2 · M0",
+    version: "v0.0.3 · M0",
     fatalTitle: "WebGL2 isn't available",
     fatalBody: "Muse renders every look with a single WebGL2 shader chain — there's no fallback path by design. Your browser or device didn't provide a WebGL2 context.",
     fatalList: [
@@ -279,7 +279,7 @@ void main() {
  * is exactly what slope/offset/power express: offset lifts/crushes blacks,
  * slope tilts the cast, power bends midtones, sat mutes or pushes colour.
  * ========================================================================= */
-const VERSION_ID = "0.0.2-m0";
+const VERSION_ID = "0.0.3-m0";
 const DEFAULT_SEED = 1;
 
 /* Default params for the whole 8-pass chain. Only `curve` is active in A2;
@@ -287,7 +287,7 @@ const DEFAULT_SEED = 1;
 function defaultParams() {
   return {
     curve:      { bypass: false, slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], sat: 1 },
-    defocus:    { bypass: true,  radius: 0 },
+    defocus:    { bypass: true,  radius: 0, radial: 0, blend: 1 },
     aberration: { bypass: true,  amount: 0 },
     flash:      { bypass: true,  strength: 0, radius: 0.7, softness: 0.5, vignette: 0 },
     halation:   { bypass: true,  threshold: 0.75, strength: 0, radius: 2, tint: [1, 0.6, 0.5] },
@@ -303,17 +303,28 @@ function defaultParams() {
 const LOOKS = [
   { id: "none", name: "Original", params: {} },
   { id: "sorrenti", name: "Sorrenti", params: {
-      // lifted blacks, muted sat, green-yellow midtones
-      curve: { slope: [1.02, 1.04, 0.94], offset: [0.05, 0.055, 0.03], power: [0.95, 0.92, 1.02], sat: 0.82 } } },
+      // lifted blacks, muted sat, green-yellow midtones · slight radial defocus ·
+      // hot-center hard-falloff flash
+      curve: { slope: [1.02, 1.04, 0.94], offset: [0.05, 0.055, 0.03], power: [0.95, 0.92, 1.02], sat: 0.82 },
+      defocus: { bypass: false, radius: 2.0, radial: 0.85, blend: 1 },
+      aberration: { bypass: false, amount: 1.4 },
+      flash: { bypass: false, strength: 0.35, radius: 0.5, softness: 0.25, vignette: 0.3 } } },
   { id: "corinne", name: "Corinne Day", params: {
-      // grey cast, low contrast, cool daylight
+      // grey cast, low contrast, cool daylight · no flash, no defocus (§4)
       curve: { slope: [0.90, 0.92, 0.95], offset: [0.06, 0.06, 0.07], power: [1.0, 1.0, 0.98], sat: 0.85 } } },
   { id: "disposable", name: "Disposable", params: {
-      // warm, crushed shadows, oversaturated
-      curve: { slope: [1.12, 1.06, 0.92], offset: [-0.04, -0.03, -0.03], power: [1.05, 1.02, 1.05], sat: 1.22 } } },
+      // warm, crushed shadows, oversaturated · plastic-lens edge blur + fringe ·
+      // harsh full-frame flash, deep vignette
+      curve: { slope: [1.12, 1.06, 0.92], offset: [-0.04, -0.03, -0.03], power: [1.05, 1.02, 1.05], sat: 1.22 },
+      defocus: { bypass: false, radius: 2.6, radial: 1.0, blend: 1 },
+      aberration: { bypass: false, amount: 2.4 },
+      flash: { bypass: false, strength: 0.5, radius: 0.8, softness: 0.45, vignette: 0.55 } } },
   { id: "mall", name: "Mall Studio", params: {
-      // warm, glowy, lifted everything
-      curve: { slope: [1.04, 1.02, 0.98], offset: [0.06, 0.05, 0.04], power: [0.92, 0.92, 0.95], sat: 1.05 } } },
+      // warm, glowy, lifted everything · full soft-focus (uniform, part-blended) ·
+      // soft omni flash
+      curve: { slope: [1.04, 1.02, 0.98], offset: [0.06, 0.05, 0.04], power: [0.92, 0.92, 0.95], sat: 1.05 },
+      defocus: { bypass: false, radius: 3.2, radial: 0, blend: 0.6 },
+      flash: { bypass: false, strength: 0.22, radius: 0.95, softness: 0.7, vignette: 0.12 } } },
 ];
 
 /* Deep-merge preset overrides onto defaults. Arrays (vec3s) replace wholesale —
@@ -385,10 +396,97 @@ void main() {
   o = vec4(c, src.a);
 }`;
 
-/* ---- Pass registry (ordered). Later chunks push defocus → CA → flash →
-   halation → grain → leak here; trim (pass 8) is a Canvas2D compositor, not a
-   fragment pass. `paramKey` binds a pass to its slice of RECIPE.params and
-   drives per-pass bypass. ---- */
+/* Defocus (pass 2). Fixed 13-tap disc kernel (centre + two hexagonal rings,
+   hardcoded offsets — deterministic, no runtime trig). `radial` weights the
+   blur toward the frame edge (0 = uniform soft focus, 1 = edge-only, the
+   plastic-lens read); `blend` mixes blurred over sharp for the diffusion look.
+   Radius is in source pixels. Radial distance is flip-symmetric, so the
+   pre-flip v_uv is safe for the weighting. */
+const DEFOCUS_FRAG = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+uniform sampler2D u_src;
+uniform vec2 u_res;
+uniform bool u_flipY;
+uniform float u_radius;
+uniform float u_radial;
+uniform float u_blend;
+out vec4 o;
+const vec2 TAPS[12] = vec2[](
+  vec2( 0.5,    0.0  ), vec2( 0.25,  0.433), vec2(-0.25,  0.433),
+  vec2(-0.5,    0.0  ), vec2(-0.25, -0.433), vec2( 0.25, -0.433),
+  vec2( 0.866,  0.5  ), vec2( 0.0,   1.0  ), vec2(-0.866,  0.5 ),
+  vec2(-0.866, -0.5  ), vec2( 0.0,  -1.0  ), vec2( 0.866, -0.5 )
+);
+void main() {
+  vec2 uv = u_flipY ? vec2(v_uv.x, 1.0 - v_uv.y) : v_uv;
+  vec4 sharp = texture(u_src, uv);
+  vec2 p = (v_uv - 0.5) * vec2(u_res.x / u_res.y, 1.0);
+  float d = length(p) * 2.0;
+  float w = mix(1.0, smoothstep(0.2, 1.0, d), u_radial);
+  float r = u_radius * w;
+  vec3 acc = sharp.rgb;
+  float wsum = 1.0;
+  for (int i = 0; i < 12; i++) {
+    float tw = i < 6 ? 0.85 : 0.55;   // inner ring vs outer ring weight
+    acc += texture(u_src, uv + TAPS[i] * r / u_res).rgb * tw;
+    wsum += tw;
+  }
+  o = vec4(mix(sharp.rgb, acc / wsum, u_blend), sharp.a);
+}`;
+
+/* Chromatic aberration (pass 3). Radial R/B split: R sampled outward, B inward,
+   growing from zero at centre. `amount` = fringe width in pixels at mid-edge.
+   Radially symmetric, so flip-invariant like defocus. */
+const CA_FRAG = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+uniform sampler2D u_src;
+uniform vec2 u_res;
+uniform bool u_flipY;
+uniform float u_amount;
+out vec4 o;
+void main() {
+  vec2 uv = u_flipY ? vec2(v_uv.x, 1.0 - v_uv.y) : v_uv;
+  vec2 dir = uv - 0.5;
+  vec2 off = dir * (2.0 * u_amount) / u_res;
+  float r = texture(u_src, uv + off).r;
+  vec4 g = texture(u_src, uv);
+  float b = texture(u_src, uv - off).b;
+  o = vec4(r, g.g, b, g.a);
+}`;
+
+/* Flash falloff + vignette (pass 4). Aspect-corrected radial distance
+   (d: 0 centre → 1 mid-height edge). Flash lifts inside `radius` with a
+   `softness`-scaled shoulder — clipping past white is the point (blown flash
+   zone); vignette pulls the far field down toward the corners. */
+const FLASH_FRAG = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+uniform sampler2D u_src;
+uniform vec2 u_res;
+uniform bool u_flipY;
+uniform float u_strength;
+uniform float u_radius;
+uniform float u_softness;
+uniform float u_vignette;
+out vec4 o;
+void main() {
+  vec2 uv = u_flipY ? vec2(v_uv.x, 1.0 - v_uv.y) : v_uv;
+  vec4 src = texture(u_src, uv);
+  vec2 p = (v_uv - 0.5) * vec2(u_res.x / u_res.y, 1.0);
+  float d = length(p) * 2.0;
+  float lo = u_radius * max(1.0 - u_softness, 0.0);
+  float hi = u_radius * (1.0 + u_softness) + 1e-4;
+  float flash = 1.0 + u_strength * (1.0 - smoothstep(lo, hi, d));
+  float vig = 1.0 - u_vignette * smoothstep(0.5, 1.5, d);
+  o = vec4(clamp(src.rgb * flash * vig, 0.0, 1.0), src.a);
+}`;
+
+/* ---- Pass registry (ordered per §5: curve → defocus → CA → flash → halation
+   → grain → leak; trim (pass 8) is a Canvas2D compositor, not a fragment pass).
+   `paramKey` binds a pass to its slice of RECIPE.params and drives per-pass
+   bypass. ---- */
 const PASSES = [
   {
     id: "curve",
@@ -401,6 +499,40 @@ const PASSES = [
       gl.uniform3f(uloc("u_offset"), p.offset[0], p.offset[1], p.offset[2]);
       gl.uniform3f(uloc("u_power"), p.power[0], p.power[1], p.power[2]);
       gl.uniform1f(uloc("u_sat"), p.sat);
+    },
+  },
+  {
+    id: "defocus",
+    name: "Defocus",
+    paramKey: "defocus",
+    frag: DEFOCUS_FRAG,
+    uniforms(gl, uloc) {
+      const p = RECIPE.params.defocus;
+      gl.uniform1f(uloc("u_radius"), p.radius);
+      gl.uniform1f(uloc("u_radial"), p.radial);
+      gl.uniform1f(uloc("u_blend"), p.blend);
+    },
+  },
+  {
+    id: "aberration",
+    name: "Chromatic aberration",
+    paramKey: "aberration",
+    frag: CA_FRAG,
+    uniforms(gl, uloc) {
+      gl.uniform1f(uloc("u_amount"), RECIPE.params.aberration.amount);
+    },
+  },
+  {
+    id: "flash",
+    name: "Flash + vignette",
+    paramKey: "flash",
+    frag: FLASH_FRAG,
+    uniforms(gl, uloc) {
+      const p = RECIPE.params.flash;
+      gl.uniform1f(uloc("u_strength"), p.strength);
+      gl.uniform1f(uloc("u_radius"), p.radius);
+      gl.uniform1f(uloc("u_softness"), p.softness);
+      gl.uniform1f(uloc("u_vignette"), p.vignette);
     },
   },
 ];
