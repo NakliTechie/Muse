@@ -35,7 +35,7 @@
     font-synthesis: none;
   }
   * { box-sizing: border-box; }
-  html, body { height: 100%; margin: 0; }
+  html, body { height: 100%; height: 100dvh; margin: 0; }  /* dvh: no gap/clip when iOS URL bar shows/hides */
   body {
     background: var(--bg);
     color: var(--ink);
@@ -76,6 +76,7 @@
     image-rendering: auto;
     background: #000;
     touch-action: none;   /* press-and-hold before/after isn't a scroll gesture */
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;  /* no iOS selection/callout on hold */
   }
   /* Bottom action bar — primary reach zone. Buttons ≥44px tall (touch target). */
   .actionbar {
@@ -148,6 +149,8 @@
   }
   .look.has-thumb .thumb { display: block; }
   .look.has-thumb { padding: 6px; border-radius: 9px; text-align: center; font-size: 11px; line-height: 1.2; }
+  /* Let long look names (Daguerreotype, Cross-process) wrap to 2 lines, not clip (G-L6). */
+  .look.has-thumb .name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: normal; overflow: hidden; }
   .look .era { display: block; font-size: 9px; color: var(--accent); opacity: .75; letter-spacing: .04em; margin-top: 1px; }
   .preset-wrap { display: inline-flex; align-items: stretch; }
   .preset-wrap .look { border-top-right-radius: 0; border-bottom-right-radius: 0; }
@@ -191,10 +194,13 @@
 
   /* Toasts — in-app only, never native alert()/confirm() (§4, handoff §12). */
   .toasts {
-    position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
-    z-index: 60; display: flex; flex-direction: column; gap: 8px; align-items: center;
-    pointer-events: none;
+    /* Sit above the bottom chrome (look strip + action bar + home indicator) so a
+       success toast never covers the next action (G-L1). */
+    position: fixed; left: 50%; bottom: calc(150px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+    z-index: 65; display: flex; flex-direction: column; gap: 8px; align-items: center;
+    pointer-events: none; width: max-content; max-width: 92vw;
   }
+  @media (min-width: 760px) { .toasts { bottom: 24px; } }
   .toast {
     background: var(--surface); color: var(--ink);
     border: 1px solid #ffffff1f; border-left: 3px solid var(--accent);
@@ -261,11 +267,20 @@
   .drawer-head .seed input { width: 62px; }
   .icon-btn {
     appearance: none; background: #ffffff0d; border: 1px solid #ffffff20; color: var(--ink);
-    border-radius: 8px; width: 30px; height: 30px; cursor: pointer; font-size: 15px; line-height: 1;
-    display: grid; place-items: center;
+    border-radius: 8px; width: 40px; height: 40px; cursor: pointer; font-size: 16px; line-height: 1;
+    display: grid; place-items: center;   /* 40px touch target (G-M2/M6) */
   }
   .icon-btn:hover { background: #ffffff16; }
-  .drawer-body { overflow-y: auto; padding: 6px 14px 20px; flex: 1 1 auto; }
+  .drawer-body { overflow-y: auto; overscroll-behavior: contain; padding: 6px 14px 20px; flex: 1 1 auto; }
+  /* Dim scrim behind the Adjust sheet — tap-outside-to-dismiss (G-M2). */
+  .drawer-scrim { position: fixed; inset: 0; z-index: 39; background: #0007; opacity: 0; transition: opacity .2s; }
+  .drawer-scrim.open { opacity: 1; }
+  /* Grabber handle on the mobile bottom sheet (affordance for swipe/tap-to-close). */
+  .drawer::before {
+    content: ""; position: absolute; top: 7px; left: 50%; transform: translateX(-50%);
+    width: 36px; height: 4px; border-radius: 2px; background: #ffffff33;
+  }
+  @media (min-width: 760px) { .drawer::before { display: none; } }
   fieldset.pass {
     border: 1px solid #ffffff14; border-radius: 9px; margin: 12px 0 0; padding: 6px 12px 12px;
   }
@@ -283,16 +298,17 @@
     width: 100%; background: #ffffff0d; border: 1px solid #ffffff20; color: var(--ink);
     border-radius: 7px; padding: 5px 8px; font: inherit; font-size: 13px;
   }
+  /* Taller hit strip + a 22px thumb → a touch-sized target (G-H4), thin track kept. */
   input[type=range] {
-    -webkit-appearance: none; appearance: none; width: 100%; height: 22px; background: transparent; cursor: pointer;
+    -webkit-appearance: none; appearance: none; width: 100%; height: 40px; background: transparent; cursor: pointer;
   }
   input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: #ffffff1f; }
   input[type=range]::-moz-range-track { height: 4px; border-radius: 2px; background: #ffffff1f; }
   input[type=range]::-webkit-slider-thumb {
-    -webkit-appearance: none; appearance: none; width: 14px; height: 14px; margin-top: -5px;
-    border-radius: 50%; background: var(--accent); border: 2px solid #16161a;
+    -webkit-appearance: none; appearance: none; width: 22px; height: 22px; margin-top: -9px;
+    border-radius: 50%; background: var(--accent); border: 3px solid #16161a;
   }
-  input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); border: 2px solid #16161a; }
+  input[type=range]::-moz-range-thumb { width: 22px; height: 22px; border-radius: 50%; background: var(--accent); border: 3px solid #16161a; }
   input[type=range]:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--accent); outline-offset: 2px; }
   input.toggle { width: 16px; height: 16px; accent-color: var(--accent); }
   /* Desktop enhancement: the bottom sheet becomes a right-side drawer. */
@@ -387,10 +403,11 @@ const LANG = {
   en: {
     tagline: "150 years of film looks, on-device.",
     reloadSample: "Sample",
-    openImage: "Open image",
+    openImage: "Open",
     exportBtn: "Export",
-    savePreset: "Save preset",
+    savePreset: "Save",
     heroTitle: "Drop a photo to muse it",
+    heroTitleTouch: "Open a photo to muse it",
     heroSub: "Your image never leaves this device — the whole edit runs in your browser. PNG, JPEG, or WebP.",
     heroOpen: "Open image",
     heroSample: "Try a sample",
@@ -1484,7 +1501,7 @@ function openModal({ title, body, node, actions, wide, dismissValue = null }) {
     }
     modal.appendChild(bar);
     scrim.appendChild(modal);
-    scrim.addEventListener("mousedown", (e) => { if (e.target === scrim) finish(dismissValue); });
+    scrim.addEventListener("pointerdown", (e) => { if (e.target === scrim) finish(dismissValue); });
 
     const onKey = (e) => {
       if (e.key === "Escape") { e.preventDefault(); finish(dismissValue); return; }
@@ -2056,12 +2073,17 @@ function boot() {
   seedInput.addEventListener("change", () => { RECIPE.seed = Math.max(0, Math.floor(Number(seedInput.value) || 0)) >>> 0; seedInput.value = RECIPE.seed; if (hasContent) draw(); });
   $("seed-shuffle").addEventListener("click", () => { RECIPE.seed = (RECIPE.seed * 1664525 + 1013904223) >>> 0; seedInput.value = RECIPE.seed; if (hasContent) draw(); });
 
-  // Drawer open/close with focus trap + Esc (a11y — B9).
+  // Drawer open/close with focus trap + Esc (a11y — B9) + a tap-to-dismiss scrim
+  // and swipe-down-to-close on the mobile sheet (G-M2).
   const adjustBtn = $("adjust");
-  let drawerOpen = false, drawerKey = null;
+  let drawerOpen = false, drawerKey = null, drawerScrim = null;
   function openDrawer() {
     if (drawerOpen) return;
-    drawer.hidden = false; requestAnimationFrame(() => drawer.classList.add("open"));
+    drawerScrim = document.createElement("div"); drawerScrim.className = "drawer-scrim";
+    drawerScrim.addEventListener("pointerdown", closeDrawer);
+    document.body.appendChild(drawerScrim);
+    drawer.hidden = false;
+    requestAnimationFrame(() => { drawer.classList.add("open"); drawerScrim.classList.add("open"); });
     drawerOpen = true; adjustBtn.setAttribute("aria-expanded", "true");
     drawerKey = (e) => { if (e.key === "Escape") { e.preventDefault(); closeDrawer(); } else if (e.key === "Tab") trapTab(e, drawer); };
     document.addEventListener("keydown", drawerKey, true);
@@ -2071,11 +2093,19 @@ function boot() {
     if (!drawerOpen) return;
     drawer.classList.remove("open"); drawerOpen = false; adjustBtn.setAttribute("aria-expanded", "false");
     document.removeEventListener("keydown", drawerKey, true);
+    if (drawerScrim) { const s = drawerScrim; drawerScrim = null; s.classList.remove("open"); setTimeout(() => s.remove(), 220); }
     setTimeout(() => { if (!drawerOpen) drawer.hidden = true; }, 220);
     adjustBtn.focus();
   }
   adjustBtn.addEventListener("click", () => (drawerOpen ? closeDrawer() : openDrawer()));
   $("drawer-close").addEventListener("click", closeDrawer);
+  // Swipe down on the sheet header closes it (mobile).
+  {
+    const head = drawer.querySelector(".drawer-head");
+    let sy = null;
+    head.addEventListener("pointerdown", (e) => { if (e.target.closest("input,button")) return; sy = e.clientY; });
+    head.addEventListener("pointerup", (e) => { if (sy != null && e.clientY - sy > 40) closeDrawer(); sy = null; });
+  }
 
   // State mutations funnel through these so strip, panel, and canvas stay in sync —
   // the same one mechanism the agent face (§8) drives. Param-only changes don't
@@ -2089,7 +2119,8 @@ function boot() {
   $("open-image").textContent = t("openImage");
   $("export").textContent = t("exportBtn");
   $("save-preset").textContent = t("savePreset");
-  $("hero-title").textContent = t("heroTitle");
+  // On touch devices there's no "drop" — use "Open" as the verb (G-M5).
+  $("hero-title").textContent = matchMedia("(pointer: coarse)").matches ? t("heroTitleTouch") : t("heroTitle");
   $("hero-sub").textContent = t("heroSub");
   $("hero-open").textContent = t("heroOpen");
   $("sample-label").textContent = t("sampleLabel");
@@ -2130,8 +2161,23 @@ function boot() {
     if (on && !peeking) { peeking = true; drawOriginal(); }
     else if (!on && peeking) { peeking = false; draw(); }
   }
-  view.addEventListener("pointerdown", (e) => { if (e.button === 0) peek(true); });
-  for (const ev of ["pointerup", "pointerleave", "pointercancel"]) view.addEventListener(ev, () => peek(false));
+  // Hold-to-compare: require a deliberate ~200ms press before flashing the original,
+  // and cancel if the finger drifts >8px — so a light thumb-brush or a tap doesn't
+  // accidentally flip to Original (G-H2). Keyboard Space still peeks instantly.
+  let holdTimer = null, holdStart = null;
+  const clearHold = () => { if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; } };
+  view.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    holdStart = { x: e.clientX, y: e.clientY };
+    clearHold();
+    holdTimer = setTimeout(() => { holdTimer = null; peek(true); }, 200);
+  });
+  view.addEventListener("pointermove", (e) => {
+    if (holdStart && Math.hypot(e.clientX - holdStart.x, e.clientY - holdStart.y) > 8) { clearHold(); if (peeking) peek(false); }
+  });
+  for (const ev of ["pointerup", "pointerleave", "pointercancel"]) {
+    view.addEventListener(ev, () => { clearHold(); holdStart = null; peek(false); });
+  }
 
   /* ---- Help + intro modals (B8) ---- */
   async function showHelp() {
