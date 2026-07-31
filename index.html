@@ -12,7 +12,7 @@
 -->
 <meta http-equiv="Content-Security-Policy"
       content="default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'">
-<meta name="version" content="0.0.7-m0">
+<meta name="version" content="0.1.0-m1">
 <!-- Inline favicon: no favicon.ico request, no 404 in console (gate: zero errors) -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230b0b0d'/%3E%3Ccircle cx='8' cy='8' r='4.5' fill='none' stroke='%23d8c08a' stroke-width='1.6'/%3E%3Ccircle cx='8' cy='8' r='1.6' fill='%23d8c08a'/%3E%3C/svg%3E">
 <title>Muse</title>
@@ -40,22 +40,26 @@
     flex-direction: column;
     overflow: hidden;
   }
-  .topbar {
-    display: flex; align-items: center; gap: var(--gap);
-    padding: 10px 16px;
-    border-bottom: 1px solid #ffffff12;
+  /* Mobile-first, Instagram-shaped: slim app bar on top, full-bleed image, look
+     strip + thumb-reachable action bar pinned to the bottom. Desktop just widens. */
+  .appbar {
+    display: flex; align-items: center; gap: 10px;
+    padding: max(8px, env(safe-area-inset-top)) 14px 8px;
     flex: 0 0 auto;
   }
   .brand { font-weight: 600; letter-spacing: .02em; }
   .brand .dot { color: var(--accent); }
   .spacer { flex: 1 1 auto; }
+  .appbar .status { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .appbar .ver { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  @media (max-width: 620px) { .appbar .status { display: none; } }   /* keep the phone bar clean */
   .stage {
     flex: 1 1 auto;
     position: relative;
     display: grid;
     place-items: center;
     min-height: 0;
-    padding: var(--gap);
+    padding: 8px 10px;
   }
   #view {
     max-width: 100%;
@@ -64,16 +68,19 @@
     box-shadow: 0 6px 30px #0008;
     image-rendering: auto;
     background: #000;
+    touch-action: none;   /* press-and-hold before/after isn't a scroll gesture */
   }
-  .footer {
+  /* Bottom action bar — primary reach zone. Buttons ≥44px tall (touch target). */
+  .actionbar {
     flex: 0 0 auto;
-    display: flex; align-items: center; gap: 10px;
-    padding: 8px 16px;
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
     border-top: 1px solid #ffffff12;
-    color: var(--muted);
-    font-size: 12px;
+    overflow-x: auto;
   }
-  .footer .ver { font-variant-numeric: tabular-nums; }
+  .actionbar .btn { min-height: 44px; flex: 0 0 auto; }
+  .actionbar #export { border-color: var(--accent); }
+  @media (min-width: 760px) { .actionbar #export { margin-left: auto; } }  /* park Export right on desktop */
 
   /* Full-viewport WebGL2-unavailable error state — no partial UI behind it. */
   .fatal {
@@ -102,16 +109,18 @@
   }
   .btn:hover { background: #ffffff16; }
 
-  /* Look strip — M0 harness selector. The M1 editor upgrades these to live
-     thumbnail previews; here they're labelled pills so looks are switchable. */
+  /* Look strip — bottom-pinned horizontal scroller (Instagram filter row). Live
+     thumbnail previews per look; name-forward under each thumb. */
   .lookstrip {
-    display: flex; align-items: center; gap: 8px;
-    padding: 8px 16px;
-    border-bottom: 1px solid #ffffff12;
+    display: flex; align-items: flex-end; gap: 8px;
+    padding: 8px 12px;
     flex: 0 0 auto;
     overflow-x: auto;
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
   }
-  .lookstrip .lbl { color: var(--muted); font-size: 12px; margin-right: 2px; white-space: nowrap; }
+  .lookstrip .look { scroll-snap-align: start; }
+  .lookstrip .lbl { display: none; }   /* the thumbnails name themselves */
   .look {
     appearance: none; border: 1px solid #ffffff18; background: #ffffff08;
     color: var(--ink); border-radius: 999px; padding: 6px 14px; cursor: pointer;
@@ -122,27 +131,212 @@
   .look[aria-pressed="true"] {
     border-color: var(--accent); color: var(--accent); background: #d8c08a14;
   }
+  .look .thumb {
+    display: none; width: 76px; height: 57px; border-radius: 6px;
+    object-fit: cover; margin-bottom: 5px; background: #000;
+  }
+  .look.has-thumb .thumb { display: block; }
+  .look.has-thumb { padding: 6px; border-radius: 9px; text-align: center; font-size: 11px; line-height: 1.2; }
+  .preset-wrap { display: inline-flex; align-items: stretch; }
+  .preset-wrap .look { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .look-del {
+    appearance: none; border: 1px solid #ffffff18; border-left: none; background: #ffffff08;
+    color: var(--muted); cursor: pointer; padding: 0 8px; font-size: 11px;
+    border-radius: 0 999px 999px 0;
+  }
+  .look-del:hover { color: var(--danger); background: #ffffff14; }
+
+  /* Drop-zone hero — shown until an image loads. Never a blank canvas (§4). */
+  .hero {
+    position: absolute; inset: var(--gap);
+    display: grid; place-items: center;
+    border: 2px dashed #ffffff26; border-radius: var(--radius);
+    background: #ffffff05; text-align: center; padding: 24px;
+    transition: border-color .15s, background .15s;
+  }
+  .hero.hidden { display: none; }
+  .hero.drag { border-color: var(--accent); background: #d8c08a12; }
+  .hero .h-inner { max-width: 420px; }
+  .hero h2 { margin: 0 0 6px; font-size: 20px; font-weight: 600; }
+  .hero p { margin: 0 0 18px; color: var(--muted); }
+  .hero .row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .btn.primary { border-color: var(--accent); color: var(--accent); background: #d8c08a12; }
+  .btn.primary:hover { background: #d8c08a20; }
+
+  /* Toasts — in-app only, never native alert()/confirm() (§4, handoff §12). */
+  .toasts {
+    position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+    z-index: 60; display: flex; flex-direction: column; gap: 8px; align-items: center;
+    pointer-events: none;
+  }
+  .toast {
+    background: var(--surface); color: var(--ink);
+    border: 1px solid #ffffff1f; border-left: 3px solid var(--accent);
+    border-radius: 8px; padding: 10px 14px; max-width: 90vw;
+    box-shadow: 0 8px 24px #000a; font-size: 13px;
+    animation: toast-in .18s ease-out;
+  }
+  .toast.err { border-left-color: var(--danger); }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) {
+    .toast { animation: none; } .hero { transition: none; }
+  }
+  .visually-hidden {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+
+  /* In-app modal (confirm / help / intro) — replaces native alert/confirm/prompt. */
+  .modal-scrim {
+    position: fixed; inset: 0; z-index: 70;
+    display: grid; place-items: center;
+    background: #000a; padding: 20px;
+    animation: toast-in .15s ease-out;
+  }
+  .modal {
+    background: var(--surface); color: var(--ink);
+    border: 1px solid #ffffff1f; border-radius: var(--radius);
+    padding: 22px; max-width: 460px; width: 100%;
+    box-shadow: 0 16px 48px #000b; max-height: 86vh; overflow: auto;
+  }
+  .modal.wide { max-width: 560px; }
+  .modal h2 { margin: 0 0 10px; font-size: 17px; }
+  .modal p { margin: 0 0 12px; color: var(--muted); }
+  .modal .actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
+  .modal dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; }
+  .modal dt { color: var(--ink); }
+  .modal dt kbd {
+    font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: #ffffff12; border: 1px solid #ffffff22; border-bottom-width: 2px;
+    border-radius: 5px; padding: 1px 6px;
+  }
+  .modal dd { color: var(--muted); margin: 0; align-self: center; }
+
+  /* Adjust — bottom sheet by default (mobile-first); a right-side drawer on wide
+     screens. Base is the phone shape; the media query is the desktop enhancement. */
+  .stage { position: relative; }
+  .drawer {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+    width: 100%; height: 74vh;
+    background: var(--surface); border-top: 1px solid #ffffff16;
+    border-radius: 16px 16px 0 0;
+    display: flex; flex-direction: column;
+    transform: translateY(100%); transition: transform .22s ease;
+    box-shadow: 0 -12px 40px #0006;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .drawer.open { transform: none; }
+  .drawer-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 14px; border-bottom: 1px solid #ffffff12; flex: 0 0 auto;
+  }
+  .drawer-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
+  .drawer-head .seed { display: flex; align-items: center; gap: 6px; margin-left: auto; color: var(--muted); font-size: 12px; }
+  .drawer-head .seed input { width: 62px; }
+  .icon-btn {
+    appearance: none; background: #ffffff0d; border: 1px solid #ffffff20; color: var(--ink);
+    border-radius: 8px; width: 30px; height: 30px; cursor: pointer; font-size: 15px; line-height: 1;
+    display: grid; place-items: center;
+  }
+  .icon-btn:hover { background: #ffffff16; }
+  .drawer-body { overflow-y: auto; padding: 6px 14px 20px; flex: 1 1 auto; }
+  fieldset.pass {
+    border: 1px solid #ffffff14; border-radius: 9px; margin: 12px 0 0; padding: 6px 12px 12px;
+  }
+  fieldset.pass[data-bypassed="1"] .ctl { opacity: .4; pointer-events: none; }
+  fieldset.pass legend {
+    display: flex; align-items: center; gap: 8px; padding: 0 4px; font-size: 12px; font-weight: 600;
+  }
+  fieldset.pass legend .sw { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: var(--muted); font-weight: 400; }
+  .ctl { margin-top: 10px; }
+  .ctl .lab { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+  .ctl .lab .val { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .ctl.rgb .triple { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .ctl.rgb .triple .sub { font-size: 10px; color: var(--muted); text-align: center; }
+  select.field, input.field {
+    width: 100%; background: #ffffff0d; border: 1px solid #ffffff20; color: var(--ink);
+    border-radius: 7px; padding: 5px 8px; font: inherit; font-size: 13px;
+  }
+  input[type=range] {
+    -webkit-appearance: none; appearance: none; width: 100%; height: 22px; background: transparent; cursor: pointer;
+  }
+  input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: #ffffff1f; }
+  input[type=range]::-moz-range-track { height: 4px; border-radius: 2px; background: #ffffff1f; }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none; width: 14px; height: 14px; margin-top: -5px;
+    border-radius: 50%; background: var(--accent); border: 2px solid #16161a;
+  }
+  input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); border: 2px solid #16161a; }
+  input[type=range]:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--accent); outline-offset: 2px; }
+  input.toggle { width: 16px; height: 16px; accent-color: var(--accent); }
+  /* Desktop enhancement: the bottom sheet becomes a right-side drawer. */
+  @media (min-width: 760px) {
+    .drawer {
+      top: 0; bottom: 0; right: 0; left: auto;
+      width: 360px; height: 100%;
+      border-top: none; border-left: 1px solid #ffffff16;
+      border-radius: 0; transform: translateX(100%);
+      box-shadow: -12px 0 40px #0006;
+    }
+    .drawer.open { transform: none; }
+    /* Roomier chrome on desktop */
+    .stage { padding: var(--gap); }
+  }
 </style>
 </head>
 <body>
-  <div class="topbar">
+  <header class="appbar">
     <span class="brand">Muse<span class="dot">.</span></span>
-    <span class="hint" id="tagline"></span>
+    <span class="status" id="engine-status"></span>
     <span class="spacer"></span>
-    <button class="btn" id="reload-sample" type="button"></button>
-  </div>
-
-  <nav class="lookstrip" id="lookstrip" aria-label="looks"></nav>
+    <span class="ver" id="ver"></span>
+    <button class="btn" id="help" type="button"></button>
+  </header>
 
   <main class="stage">
     <canvas id="view" width="1024" height="768" aria-label="image preview"></canvas>
+
+    <!-- Drop-zone hero: shown until an image (or sample) is loaded. Never blank. -->
+    <div class="hero" id="hero">
+      <div class="h-inner">
+        <h2 id="hero-title"></h2>
+        <p id="hero-sub"></p>
+        <div class="row">
+          <button class="btn primary" id="hero-open" type="button"></button>
+          <button class="btn" id="hero-sample" type="button"></button>
+        </div>
+      </div>
+    </div>
   </main>
 
-  <div class="footer">
-    <span id="engine-status"></span>
-    <span class="spacer"></span>
-    <span class="ver" id="ver"></span>
+  <!-- Look strip: bottom-pinned filter row (Instagram-shaped), thumb-reachable. -->
+  <nav class="lookstrip" id="lookstrip" aria-label="looks"></nav>
+
+  <!-- Primary action bar: bottom reach zone, ≥44px touch targets. -->
+  <div class="actionbar">
+    <button class="btn" id="open-image" type="button"></button>
+    <button class="btn" id="reload-sample" type="button"></button>
+    <button class="btn" id="adjust" type="button" hidden aria-expanded="false" aria-controls="drawer"></button>
+    <button class="btn" id="save-preset" type="button" hidden></button>
+    <button class="btn primary" id="export" type="button" hidden></button>
   </div>
+
+  <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp" class="visually-hidden" aria-hidden="true" tabindex="-1">
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+  <!-- Adjust drawer (desktop) / bottom sheet (mobile). Sliders grouped per pass. -->
+  <aside class="drawer" id="drawer" aria-label="Adjust" hidden>
+    <div class="drawer-head">
+      <h2 id="drawer-title"></h2>
+      <span class="seed">
+        <label for="seed-input" id="seed-label"></label>
+        <input class="field" type="number" id="seed-input" min="0" step="1" inputmode="numeric">
+        <button class="icon-btn" id="seed-shuffle" type="button" title="Shuffle seed">⟳</button>
+      </span>
+      <button class="icon-btn" id="drawer-close" type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
 
   <!-- WebGL2 capability gate: full-viewport, no dead sliders behind it -->
   <div class="fatal" id="fatal" role="alertdialog" aria-modal="true">
@@ -165,7 +359,77 @@
 const LANG = {
   en: {
     tagline: "90s film looks, on-device.",
-    reloadSample: "New sample",
+    reloadSample: "Sample",
+    openImage: "Open image",
+    exportBtn: "Export",
+    savePreset: "Save preset",
+    heroTitle: "Drop a photo to muse it",
+    heroSub: "Your image never leaves this device — the whole edit runs in your browser. PNG, JPEG, or WebP.",
+    heroOpen: "Open image",
+    heroSample: "Try a sample",
+    toastUnreadable: "That file isn't a supported image. Accepted: PNG, JPEG, WebP.",
+    toastDownscaled: (mp) => `Large image (${mp}MP) — preview downscaled for speed; export uses full detail where memory allows.`,
+    toastDecodeFail: "Couldn't read that image — it may be corrupt.",
+    // Recipe / export
+    recipeFoundTitle: "Restore this edit?",
+    recipeFoundBody: "This image carries a Muse recipe — the exact look, sliders, and seed it was exported with. Restore them?",
+    restore: "Restore edit",
+    keepAsIs: "Keep as-is",
+    exportDone: "Saved — recipe embedded in the PNG.",
+    exportCancelled: "Export cancelled.",
+    exportFail: "Export failed — see console.",
+    close: "Close",
+    // a11y attribute strings (routed through the map so locales can override)
+    a11yPreview: "Image preview",
+    a11yLooks: "Looks",
+    shuffleSeed: "Shuffle seed",
+    // Help + intro
+    help: "Help",
+    helpBtn: "?",
+    helpTitle: "Keyboard & privacy",
+    privacyLine: "Your photos never leave your device — there is no upload. You can verify it: open your browser's Network tab and watch it stay silent while you edit and export.",
+    shortcuts: [
+      ["Space (hold)", "Show the original — before / after"],
+      ["1 – 4", "Sorrenti · Corinne Day · Disposable · Mall Studio"],
+      ["0", "Original (no look)"],
+      ["⌘ / Ctrl + S", "Export with recipe embedded"],
+      ["?", "This help"],
+      ["Esc", "Close the panel or a dialog"],
+    ],
+    gotIt: "Got it",
+    // Presets
+    savePresetTitle: "Save preset",
+    presetNamePlaceholder: "Preset name",
+    save: "Save",
+    cancel: "Cancel",
+    exportJson: "Export .muse.json",
+    importJson: "Import .muse.json",
+    presetSaved: (n) => `Saved preset “${n}”.`,
+    presetDeleted: "Preset deleted.",
+    jsonInvalid: "That isn't a valid .muse.json recipe.",
+    jsonImported: "Recipe imported.",
+    deletePreset: (n) => `Delete preset ${n}`,
+    unnamed: "Untitled",
+    introTitle: "Welcome to Muse",
+    introBody: "Drop a photo, pick a 90s film look, tune it with the deep sliders, and export. Everything runs on your device — nothing is uploaded. Every export carries its recipe, so dropping the image back in restores the exact edit.",
+    // Adjust drawer
+    adjust: "Adjust",
+    drawerTitle: "Adjust",
+    seedLabel: "Seed",
+    bypassOn: "on",
+    rgbSub: ["R", "G", "B"],
+    passNames: {
+      curve: "Film curve + cast", defocus: "Defocus", aberration: "Chromatic aberration",
+      flash: "Flash + vignette", halation: "Halation", grain: "Grain", leak: "Light leak", trim: "Trim",
+    },
+    ctl: {
+      slope: "Slope", offset: "Offset (lift)", power: "Power (gamma)", sat: "Saturation",
+      radius: "Radius", edge: "Edge bias", blend: "Blend", amount: "Amount",
+      strength: "Strength", softness: "Softness", vignette: "Vignette",
+      threshold: "Threshold", spread: "Spread", tint: "Tint", size: "Size",
+      hue: "Hue", angle: "Angle", falloff: "Falloff",
+      aspect: "Aspect", border: "Border", stamp: "Date stamp", matte: "Oval matte", none: "None",
+    },
     lookLabel: "Look",
     // Proper nouns still route through the map so the i18n scaffold stays honest (§13).
     lookNames: {
@@ -176,7 +440,7 @@ const LANG = {
       mall: "Mall Studio",
     },
     engineReady: (n) => `WebGL2 ready · ${n} pass${n === 1 ? "" : "es"} in chain`,
-    version: "v0.0.7 · M0",
+    version: "v0.1.0 · M1",
     fatalTitle: "WebGL2 isn't available",
     fatalBody: "Muse renders every look with a single WebGL2 shader chain — there's no fallback path by design. Your browser or device didn't provide a WebGL2 context.",
     fatalList: [
@@ -282,7 +546,7 @@ void main() {
  * is exactly what slope/offset/power express: offset lifts/crushes blacks,
  * slope tilts the cast, power bends midtones, sat mutes or pushes colour.
  * ========================================================================= */
-const VERSION_ID = "0.0.7-m0";
+const VERSION_ID = "0.1.0-m1";
 const DEFAULT_SEED = 1;
 
 /* Default params for the whole 8-pass chain. Only `curve` is active in A2;
@@ -1016,10 +1280,223 @@ function makeSampleImage(w, h, variant) {
   return c;
 }
 
+/* =========================================================================
+ * In-app modal — replaces native alert/confirm/prompt (handoff §12). Focus-
+ * trapped, Esc/scrim-dismiss, restores focus to the opener. Returns a promise
+ * that resolves with the chosen action's value (or null on dismiss).
+ * ========================================================================= */
+function openModal({ title, body, node, actions, wide, dismissValue = null }) {
+  return new Promise((resolve) => {
+    const opener = document.activeElement;
+    const scrim = document.createElement("div");
+    scrim.className = "modal-scrim";
+    const modal = document.createElement("div");
+    modal.className = "modal" + (wide ? " wide" : "");
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    if (title) {
+      const h = document.createElement("h2");
+      h.id = "modal-title-" + Math.floor(performance.now());
+      h.textContent = title;
+      modal.setAttribute("aria-labelledby", h.id);
+      modal.appendChild(h);
+    }
+    if (node) modal.appendChild(node);
+    else if (body) { const p = document.createElement("p"); p.textContent = body; modal.appendChild(p); }
+
+    const bar = document.createElement("div");
+    bar.className = "actions";
+    let done = false;
+    const finish = (val) => { if (done) return; done = true; document.removeEventListener("keydown", onKey, true); scrim.remove(); if (opener && opener.focus) opener.focus(); resolve(val); };
+    for (const a of (actions || [{ label: "OK", value: true, primary: true }])) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "btn" + (a.primary ? " primary" : "");
+      b.textContent = a.label;
+      b.addEventListener("click", () => finish(a.value));
+      bar.appendChild(b);
+    }
+    modal.appendChild(bar);
+    scrim.appendChild(modal);
+    scrim.addEventListener("mousedown", (e) => { if (e.target === scrim) finish(dismissValue); });
+
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); finish(dismissValue); return; }
+      if (e.key === "Tab") {
+        const f = modal.querySelectorAll('button, [href], input, [tabindex]:not([tabindex="-1"])');
+        if (!f.length) return;
+        const first = f[0], last = f[f.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    document.body.appendChild(scrim);
+    const focusFirst = bar.querySelector(".primary") || bar.querySelector("button");
+    focusFirst && focusFirst.focus();
+  });
+}
+
+/* =========================================================================
+ * Recipe embed = the artifact (§6). PNG tEXt chunk, keyword "muse", no EXIF
+ * library (§12). CRC-32 is the standard PNG polynomial. The chunk is inserted
+ * immediately before IEND; reading walks the chunk list for keyword "muse".
+ * ========================================================================= */
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(bytes) {
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+const RECIPE_KEYWORD = "muse";
+// tEXt is Latin-1; our recipe JSON is ASCII (numeric params, ASCII keys), so a
+// byte-per-char encoding round-trips exactly.
+function latin1Bytes(str) { const u = new Uint8Array(str.length); for (let i = 0; i < str.length; i++) u[i] = str.charCodeAt(i) & 0xff; return u; }
+function latin1Str(bytes) { let s = ""; for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]); return s; }
+
+function embedRecipePNG(png, recipeStr) {
+  const type = latin1Bytes("tEXt");
+  const data = latin1Bytes(RECIPE_KEYWORD + "\0" + recipeStr);
+  const chunk = new Uint8Array(12 + data.length);
+  const dv = new DataView(chunk.buffer);
+  dv.setUint32(0, data.length);
+  chunk.set(type, 4);
+  chunk.set(data, 8);
+  const crcIn = new Uint8Array(4 + data.length); crcIn.set(type, 0); crcIn.set(data, 4);
+  dv.setUint32(8 + data.length, crc32(crcIn));
+  // IEND is the final 12 bytes of a valid PNG; splice the tEXt chunk before it.
+  const iendPos = png.length - 12;
+  const out = new Uint8Array(png.length + chunk.length);
+  out.set(png.subarray(0, iendPos), 0);
+  out.set(chunk, iendPos);
+  out.set(png.subarray(iendPos), iendPos + chunk.length);
+  return out;
+}
+function readRecipePNG(png) {
+  if (png.length < 8 || png[0] !== 0x89 || png[1] !== 0x50 || png[2] !== 0x4e || png[3] !== 0x47) return null;
+  const dv = new DataView(png.buffer, png.byteOffset, png.byteLength);
+  let p = 8;
+  while (p + 8 <= png.length) {
+    const len = dv.getUint32(p);
+    const type = latin1Str(png.subarray(p + 4, p + 8));
+    const dataStart = p + 8;
+    if (type === "tEXt") {
+      const data = png.subarray(dataStart, dataStart + len);
+      const z = data.indexOf(0);
+      if (z >= 0 && latin1Str(data.subarray(0, z)) === RECIPE_KEYWORD) {
+        return latin1Str(data.subarray(z + 1));
+      }
+    }
+    if (type === "IEND") break;
+    p = dataStart + len + 4;   // data + 4-byte CRC
+  }
+  return null;
+}
+
+// Save a blob via the File System Access API, falling back to <a download>.
+async function saveBlob(blob, name) {
+  if (window.showSaveFilePicker) {
+    try {
+      const h = await window.showSaveFilePicker({
+        suggestedName: name,
+        types: [{ description: "PNG image", accept: { "image/png": [".png"] } }],
+      });
+      const w = await h.createWritable();
+      await w.write(blob); await w.close();
+      return "saved";
+    } catch (e) {
+      if (e && e.name === "AbortError") return "cancelled";
+      // fall through to download on any FSA failure
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return "downloaded";
+}
+
+/* =========================================================================
+ * Slider panel schema (B3). Each group binds to a pass's param slice; each
+ * control to a prop (rgb:true → a vec3 shown as three R/G/B sliders). Ranges
+ * frame the useful travel around the look presets. `key` indexes the i18n
+ * ctl vocabulary so no label is hardcoded outside the lang map (§13).
+ * ========================================================================= */
+const PANEL = [
+  { pass: "curve", controls: [
+    { prop: "slope",  rgb: true, key: "slope",  min: 0.5, max: 1.5, step: 0.01 },
+    { prop: "offset", rgb: true, key: "offset", min: -0.2, max: 0.2, step: 0.005 },
+    { prop: "power",  rgb: true, key: "power",  min: 0.5, max: 1.5, step: 0.01 },
+    { prop: "sat",    key: "sat", min: 0, max: 2, step: 0.01 },
+  ] },
+  { pass: "defocus", controls: [
+    { prop: "radius", key: "radius", min: 0, max: 5, step: 0.05 },
+    { prop: "radial", key: "edge",   min: 0, max: 1, step: 0.01 },
+    { prop: "blend",  key: "blend",  min: 0, max: 1, step: 0.01 },
+  ] },
+  { pass: "aberration", controls: [
+    { prop: "amount", key: "amount", min: 0, max: 5, step: 0.05 },
+  ] },
+  { pass: "flash", controls: [
+    { prop: "strength", key: "strength", min: 0, max: 1, step: 0.01 },
+    { prop: "radius",   key: "radius",   min: 0, max: 1.2, step: 0.01 },
+    { prop: "softness", key: "softness", min: 0, max: 1, step: 0.01 },
+    { prop: "vignette", key: "vignette", min: 0, max: 1, step: 0.01 },
+  ] },
+  { pass: "halation", controls: [
+    { prop: "threshold", key: "threshold", min: 0, max: 1, step: 0.01 },
+    { prop: "strength",  key: "strength",  min: 0, max: 1.5, step: 0.01 },
+    { prop: "radius",    key: "spread",    min: 0, max: 8, step: 0.1 },
+    { prop: "tint",      rgb: true, key: "tint", min: 0, max: 1, step: 0.01 },
+  ] },
+  { pass: "grain", controls: [
+    { prop: "amount", key: "amount", min: 0, max: 0.4, step: 0.005 },
+    { prop: "size",   key: "size",   min: 1, max: 5, step: 0.1 },
+  ] },
+  { pass: "leak", controls: [
+    { prop: "strength", key: "strength", min: 0, max: 1, step: 0.01 },
+    { prop: "hue",      key: "hue",      min: 0, max: 1, step: 0.01 },
+    { prop: "angle",    key: "angle",    min: 0, max: 6.283, step: 0.01 },
+    { prop: "width",    key: "falloff",  min: 0.5, max: 8, step: 0.1 },
+  ] },
+  { pass: "trim", controls: [
+    { prop: "aspect", key: "aspect", kind: "select", options: ["none", "4:3", "3:2", "1:1"] },
+    { prop: "border", key: "border", min: 0, max: 0.1, step: 0.002 },
+    { prop: "stamp",  key: "stamp",  kind: "toggle" },
+    { prop: "matte",  key: "matte",  kind: "toggle" },
+  ] },
+];
+
+/* Focus-trap Tab within a container (drawer/modal share this shape). */
+function trapTab(e, container) {
+  const f = container.querySelectorAll("button, [href], input, select, [tabindex]:not([tabindex='-1'])");
+  if (!f.length) return;
+  const first = f[0], last = f[f.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+}
+
+/* localStorage wrapper — only presets/lang/intro/dev live here (§5); never image
+   data. Wrapped so a locked-down storage (private mode, file://) fails soft. */
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch (_) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (_) {} },
+  del(k) { try { localStorage.removeItem(k); } catch (_) {} },
+};
+const STORE_KEYS = { presets: "muse.presets", lang: "muse.lang", intro: "muse.intro", dev: "muse.dev" };
+
 /* ---- Boot ---- */
 function boot() {
   // static strings
-  $("tagline").textContent = t("tagline");
   $("reload-sample").textContent = t("reloadSample");
   $("ver").textContent = t("version");
 
@@ -1036,17 +1513,138 @@ function boot() {
   }
 
   let variant = 0;
+  let sourceImage = null;   // loaded user image (ImageBitmap/canvas); null → procedural sample
+  let sourceDirty = true;   // GPU source needs (re)upload before next render
+  let hasContent = false;   // something has been rendered → hero dismissed, editor live
+
   // Full-chain count: active GL passes + the trim compositor when enabled.
   const chainCount = () => engine.activeCount() + (RECIPE.params.trim.bypass ? 0 : 1);
+  const currentSource = () => sourceImage || makeSampleImage(1024, 768, variant);
+  // sourceDirty splits upload from re-render: param-only edits (sliders, looks)
+  // skip the re-upload, so dragging a slider on a big photo stays smooth.
   function draw() {
-    const img = makeSampleImage(1024, 768, variant);
-    engine.render(img);
+    if (sourceDirty) { engine.render(currentSource()); sourceDirty = false; }
+    else { engine.render(); }
     compositeTrim(canvas, view);
     $("engine-status").textContent = t("engineReady", chainCount());
   }
 
-  // Look strip — one pill per look; active reflects RECIPE.look.
+  /* ---- In-app toasts (never native alert/confirm — handoff §12) ---- */
+  const toastHost = $("toasts");
+  function toast(msg, kind) {
+    const el = document.createElement("div");
+    el.className = "toast" + (kind === "err" ? " err" : "");
+    el.textContent = msg;
+    toastHost.appendChild(el);
+    setTimeout(() => {
+      el.style.transition = "opacity .3s"; el.style.opacity = "0";
+      setTimeout(() => el.remove(), 320);
+    }, kind === "err" ? 5200 : 4200);
+  }
+
+  /* ---- Source loading: hero → live editor ---- */
+  const hero = $("hero");
+  function revealEditor() {
+    hasContent = true;
+    hero.classList.add("hidden");
+    $("export").hidden = false;
+    $("save-preset").hidden = false;
+    $("adjust").hidden = false;
+  }
+  function setSource(img) { sourceImage = img; sourceDirty = true; revealEditor(); draw(); refreshThumbs(); }
+  function loadSample() { sourceImage = null; sourceDirty = true; revealEditor(); draw(); refreshThumbs(); }
+
+  const MAX_MP = 24;   // >24MP → downscale for preview (handoff §4)
+  async function loadFile(file) {
+    if (!file) return;
+    if (!/^image\/(png|jpeg|webp)$/i.test(file.type)) { toast(t("toastUnreadable"), "err"); return; }
+    // Sniff an embedded Muse recipe (PNG tEXt) before we throw the bytes away.
+    let recipeStr = null;
+    if (/png/i.test(file.type)) {
+      try { recipeStr = readRecipePNG(new Uint8Array(await file.arrayBuffer())); } catch (_) {}
+    }
+    let bmp;
+    try {
+      bmp = await createImageBitmap(file, { imageOrientation: "from-image" });  // respect EXIF rotation
+    } catch (e) {
+      console.error("[muse] decode failed:", e); toast(t("toastDecodeFail"), "err"); return;
+    }
+    let img = bmp;
+    const mp = (bmp.width * bmp.height) / 1e6;
+    if (mp > MAX_MP) {
+      const s = Math.sqrt(MAX_MP / mp);
+      const cw = Math.max(1, Math.round(bmp.width * s)), ch = Math.max(1, Math.round(bmp.height * s));
+      const cv = document.createElement("canvas"); cv.width = cw; cv.height = ch;
+      cv.getContext("2d").drawImage(bmp, 0, 0, cw, ch);
+      img = cv;
+      toast(t("toastDownscaled", mp.toFixed(0)));
+    }
+    setSource(img);
+    if (recipeStr) promptRestore(recipeStr);   // in-app confirm, never native (§4)
+  }
+
+  // Recipe carried in a dropped image → offer to restore the exact edit (§4).
+  async function promptRestore(recipeStr) {
+    const yes = await openModal({
+      title: t("recipeFoundTitle"),
+      body: t("recipeFoundBody"),
+      actions: [
+        { label: t("restore"), value: true, primary: true },
+        { label: t("keepAsIs"), value: false },
+      ],
+      dismissValue: false,
+    });
+    if (yes) { try { setRecipe(JSON.parse(recipeStr)); } catch (e) { console.error("[muse] recipe restore failed:", e); } }
+  }
+
+  // Export the composited frame with its recipe embedded (§6). FSA primary,
+  // <a download> fallback. via omitted here (a UI export, not an agent one).
+  async function exportImage() {
+    if (!hasContent) return;
+    try {
+      const blob = await new Promise((res) => view.toBlob(res, "image/png"));
+      if (!blob) throw new Error("toBlob returned null");
+      const withRecipe = embedRecipePNG(new Uint8Array(await blob.arrayBuffer()), serialiseRecipe(RECIPE));
+      const result = await saveBlob(new Blob([withRecipe], { type: "image/png" }), `muse-${RECIPE.look}.png`);
+      if (result === "cancelled") toast(t("exportCancelled"));
+      else toast(t("exportDone"));
+    } catch (e) {
+      console.error("[muse] export failed:", e); toast(t("exportFail"), "err");
+    }
+  }
+  $("export").addEventListener("click", exportImage);
+
+  // File picker + drag/drop. Window-level dragover/drop preventDefault stops the
+  // browser from navigating away when a photo lands outside the stage.
+  const fileInput = $("file-input");
+  fileInput.addEventListener("change", () => {
+    const f = fileInput.files && fileInput.files[0];
+    fileInput.value = "";                     // let the same file be re-picked
+    loadFile(f);
+  });
+  const pick = () => fileInput.click();
+  $("open-image").addEventListener("click", pick);
+  $("hero-open").addEventListener("click", pick);
+  $("hero-sample").addEventListener("click", loadSample);
+
+  const stage = document.querySelector(".stage");
+  const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+  stage.addEventListener("dragenter", (e) => { stop(e); hero.classList.add("drag"); });
+  stage.addEventListener("dragover", (e) => { stop(e); if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"; hero.classList.add("drag"); });
+  stage.addEventListener("dragleave", (e) => { stop(e); if (e.target === stage || e.target === hero) hero.classList.remove("drag"); });
+  stage.addEventListener("drop", (e) => { stop(e); hero.classList.remove("drag"); const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]; if (f) loadFile(f); });
+  window.addEventListener("dragover", (e) => e.preventDefault());
+  window.addEventListener("drop", (e) => e.preventDefault());
+
+  // Look strip — one pill per look, then custom presets (B5). Active state:
+  // a preset if the current recipe matches one exactly, else the base look.
   const strip = $("lookstrip");
+  let presets = (() => {
+    try { const a = JSON.parse(store.get(STORE_KEYS.presets) || "[]"); return Array.isArray(a) ? a : []; }
+    catch (_) { return []; }
+  })();
+  const savePresets = () => store.set(STORE_KEYS.presets, JSON.stringify(presets));
+
   function buildLookStrip() {
     strip.textContent = "";
     const lbl = document.createElement("span");
@@ -1056,38 +1654,299 @@ function boot() {
     const names = t("lookNames");
     for (const lk of LOOKS) {
       const b = document.createElement("button");
-      b.type = "button";
-      b.className = "look";
-      b.dataset.look = lk.id;
-      b.textContent = names[lk.id] || lk.name;
-      b.setAttribute("aria-pressed", String(RECIPE.look === lk.id));
+      b.type = "button"; b.className = "look"; b.dataset.look = lk.id;
+      const img = document.createElement("img"); img.className = "thumb"; img.alt = "";
+      const nm = document.createElement("span"); nm.className = "name"; nm.textContent = names[lk.id] || lk.name;
+      b.append(img, nm);
       b.addEventListener("click", () => setLook(lk.id));
       strip.appendChild(b);
     }
+    presets.forEach((pr, i) => {
+      const wrap = document.createElement("span"); wrap.className = "preset-wrap";
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "look"; b.dataset.preset = String(i);
+      b.textContent = pr.name || t("unnamed");
+      b.addEventListener("click", () => setRecipe(pr.recipe));
+      const del = document.createElement("button");
+      del.type = "button"; del.className = "look-del"; del.textContent = "✕";
+      del.setAttribute("aria-label", t("deletePreset", pr.name || t("unnamed")));
+      del.addEventListener("click", (e) => { e.stopPropagation(); presets.splice(i, 1); savePresets(); buildLookStrip(); syncLookStrip(); refreshThumbs(); toast(t("presetDeleted")); });
+      wrap.append(b, del); strip.appendChild(wrap);
+    });
   }
   function syncLookStrip() {
+    const cur = serialiseRecipe(RECIPE);
+    const activePreset = presets.findIndex((pr) => serialiseRecipe(deserialiseRecipe(pr.recipe)) === cur);
     for (const b of strip.querySelectorAll(".look")) {
-      b.setAttribute("aria-pressed", String(b.dataset.look === RECIPE.look));
+      if (b.dataset.preset != null) b.setAttribute("aria-pressed", String(+b.dataset.preset === activePreset));
+      else b.setAttribute("aria-pressed", String(activePreset < 0 && b.dataset.look === RECIPE.look));
     }
   }
 
-  // State mutations funnel through these so the strip and canvas stay in sync —
-  // the same one mechanism the agent face (§8) will drive at M1.
-  function setLook(id) { RECIPE = makeRecipe(id); syncLookStrip(); draw(); }
-  function setRecipe(obj) { RECIPE = deserialiseRecipe(obj); syncLookStrip(); draw(); }
+  /* ---- Presets: save (localStorage) + .muse.json import/export (own transport) ---- */
+  function downloadBlob(blob, name) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  const presetFileInput = document.createElement("input");
+  presetFileInput.type = "file"; presetFileInput.accept = ".muse.json,.json,application/json";
+  presetFileInput.className = "visually-hidden";
+  document.body.appendChild(presetFileInput);
+  presetFileInput.addEventListener("change", async () => {
+    const f = presetFileInput.files && presetFileInput.files[0]; presetFileInput.value = "";
+    if (!f) return;
+    try { setRecipe(deserialiseRecipe(JSON.parse(await f.text()))); toast(t("jsonImported")); }
+    catch (e) { console.error("[muse] json import failed:", e); toast(t("jsonInvalid"), "err"); }
+  });
+  async function doSavePreset() {
+    const node = document.createElement("div");
+    const input = document.createElement("input");
+    input.className = "field"; input.type = "text"; input.placeholder = t("presetNamePlaceholder"); input.maxLength = 40;
+    node.appendChild(input);
+    const row = document.createElement("div"); row.style.cssText = "display:flex;gap:8px;margin-top:12px;flex-wrap:wrap";
+    const exp = document.createElement("button"); exp.type = "button"; exp.className = "btn"; exp.textContent = t("exportJson");
+    exp.addEventListener("click", () => downloadBlob(new Blob([serialiseRecipe(RECIPE)], { type: "application/json" }), `muse-${RECIPE.look}.muse.json`));
+    const imp = document.createElement("button"); imp.type = "button"; imp.className = "btn"; imp.textContent = t("importJson");
+    imp.addEventListener("click", () => presetFileInput.click());
+    row.append(exp, imp); node.appendChild(row);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); const ok = node.closest(".modal").querySelector(".btn.primary"); ok && ok.click(); } });
+    setTimeout(() => input.focus(), 0);
+    const ok = await openModal({ title: t("savePresetTitle"), node, actions: [{ label: t("save"), value: true, primary: true }, { label: t("cancel"), value: false }], dismissValue: false });
+    if (ok) {
+      const name = (input.value || "").trim() || t("unnamed");
+      presets.push({ name, recipe: getRecipe() });
+      savePresets(); buildLookStrip(); syncLookStrip(); refreshThumbs();
+      toast(t("presetSaved", name));
+    }
+  }
+  $("save-preset").addEventListener("click", doSavePreset);
+
+  /* ---- Look-deck thumbnails (B2): each base-look pill previews that look on the
+     loaded image. Rendered small off the current state, then restored. Refreshed
+     only on a source change (not on every look switch — the source is what varies). ---- */
+  function refreshThumbs() {
+    if (!hasContent) return;
+    const src = currentSource();
+    const tw = 152, th = Math.max(1, Math.round(tw * (src.height / src.width))) || 114;
+    const small = document.createElement("canvas"); small.width = tw; small.height = th;
+    small.getContext("2d").drawImage(src, 0, 0, tw, th);
+    const prev = RECIPE;
+    try {
+      for (const b of strip.querySelectorAll(".look[data-look]")) {
+        RECIPE = makeRecipe(b.dataset.look);
+        engine.render(small); compositeTrim(canvas, view);
+        const img = b.querySelector("img.thumb");
+        if (img) { img.src = view.toDataURL("image/jpeg", 0.72); b.classList.add("has-thumb"); }
+      }
+    } finally {
+      RECIPE = prev; sourceDirty = true; draw();   // restore even if a render throws
+    }
+  }
+
+  /* ---- Slider panel (B3): fieldset per pass, per-pass bypass, tokenised ranges.
+     panelSync[] holds one updater per control so a look/recipe change reflects
+     into every input in O(controls). ---- */
+  const drawer = $("drawer"), drawerBody = $("drawer-body"), seedInput = $("seed-input");
+  const passNames = t("passNames"), ctlNames = t("ctl"), rgbSub = t("rgbSub");
+  const panelSync = [];
+  const fmtVal = (v, step) => Number(v).toFixed(step >= 1 ? 0 : step >= 0.1 ? 1 : step >= 0.01 ? 2 : 3);
+  const getP = (pass, prop, idx) => { const v = RECIPE.params[pass][prop]; return idx == null ? v : v[idx]; };
+  const setP = (pass, prop, idx, val) => { if (idx == null) RECIPE.params[pass][prop] = val; else RECIPE.params[pass][prop][idx] = val; };
+
+  function buildPanel() {
+    drawerBody.textContent = ""; panelSync.length = 0;
+    for (const grp of PANEL) {
+      const fs = document.createElement("fieldset");
+      fs.className = "pass"; fs.dataset.pass = grp.pass;
+      const lg = document.createElement("legend");
+      const nm = document.createElement("span"); nm.textContent = passNames[grp.pass] || grp.pass; lg.appendChild(nm);
+      const sw = document.createElement("label"); sw.className = "sw";
+      const cb = document.createElement("input"); cb.type = "checkbox"; cb.className = "toggle";
+      cb.setAttribute("aria-label", (passNames[grp.pass] || grp.pass) + " " + t("bypassOn"));
+      const swt = document.createElement("span"); swt.textContent = t("bypassOn");
+      sw.appendChild(cb); sw.appendChild(swt); lg.appendChild(sw); fs.appendChild(lg);
+      cb.addEventListener("change", () => { RECIPE.params[grp.pass].bypass = !cb.checked; fs.dataset.bypassed = cb.checked ? "0" : "1"; if (hasContent) draw(); });
+      panelSync.push(() => { const on = !RECIPE.params[grp.pass].bypass; cb.checked = on; fs.dataset.bypassed = on ? "0" : "1"; });
+
+      for (const c of grp.controls) {
+        const wrap = document.createElement("div"); wrap.className = "ctl";
+        if (c.rgb) {
+          wrap.classList.add("rgb");
+          const lab = document.createElement("div"); lab.className = "lab";
+          const t1 = document.createElement("span"); t1.textContent = ctlNames[c.key] || c.key;
+          const val = document.createElement("span"); val.className = "val";
+          lab.append(t1, val); wrap.appendChild(lab);
+          const triple = document.createElement("div"); triple.className = "triple";
+          const ins = [];
+          for (let i = 0; i < 3; i++) {
+            const col = document.createElement("div");
+            const r = document.createElement("input"); r.type = "range"; r.min = c.min; r.max = c.max; r.step = c.step;
+            r.setAttribute("aria-label", (ctlNames[c.key] || c.key) + " " + rgbSub[i]);
+            const sub = document.createElement("div"); sub.className = "sub"; sub.textContent = rgbSub[i];
+            col.append(r, sub); triple.appendChild(col); ins.push(r);
+            r.addEventListener("input", () => { setP(grp.pass, c.prop, i, parseFloat(r.value)); val.textContent = ins.map((x) => fmtVal(x.value, c.step)).join(" "); if (hasContent) draw(); });
+          }
+          wrap.appendChild(triple);
+          panelSync.push(() => { for (let i = 0; i < 3; i++) ins[i].value = getP(grp.pass, c.prop, i); val.textContent = ins.map((x) => fmtVal(x.value, c.step)).join(" "); });
+        } else if (c.kind === "select") {
+          const lab = document.createElement("label"); lab.className = "lab"; lab.textContent = ctlNames[c.key] || c.key; wrap.appendChild(lab);
+          const sel = document.createElement("select"); sel.className = "field";
+          for (const opt of c.options) { const o = document.createElement("option"); o.value = opt; o.textContent = opt === "none" ? ctlNames.none : opt; sel.appendChild(o); }
+          sel.addEventListener("change", () => { RECIPE.params[grp.pass][c.prop] = sel.value; if (hasContent) draw(); });
+          wrap.appendChild(sel);
+          panelSync.push(() => { sel.value = RECIPE.params[grp.pass][c.prop]; });
+        } else if (c.kind === "toggle") {
+          const lab = document.createElement("label"); lab.style.cssText = "display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer";
+          const cbx = document.createElement("input"); cbx.type = "checkbox"; cbx.className = "toggle";
+          const span = document.createElement("span"); span.textContent = ctlNames[c.key] || c.key;
+          lab.append(cbx, span); wrap.appendChild(lab);
+          cbx.addEventListener("change", () => { RECIPE.params[grp.pass][c.prop] = cbx.checked; if (hasContent) draw(); });
+          panelSync.push(() => { cbx.checked = !!RECIPE.params[grp.pass][c.prop]; });
+        } else {
+          const lab = document.createElement("div"); lab.className = "lab";
+          const t1 = document.createElement("span"); t1.textContent = ctlNames[c.key] || c.key;
+          const val = document.createElement("span"); val.className = "val";
+          lab.append(t1, val); wrap.appendChild(lab);
+          const r = document.createElement("input"); r.type = "range"; r.min = c.min; r.max = c.max; r.step = c.step;
+          r.setAttribute("aria-label", ctlNames[c.key] || c.key);
+          r.addEventListener("input", () => { setP(grp.pass, c.prop, null, parseFloat(r.value)); val.textContent = fmtVal(r.value, c.step); if (hasContent) draw(); });
+          wrap.appendChild(r);
+          panelSync.push(() => { r.value = getP(grp.pass, c.prop, null); val.textContent = fmtVal(r.value, c.step); });
+        }
+        fs.appendChild(wrap);
+      }
+      drawerBody.appendChild(fs);
+    }
+  }
+  function syncPanel() { for (const f of panelSync) f(); seedInput.value = RECIPE.seed; }
+
+  // Seed: numeric field + deterministic shuffle (LCG step, no Math.random).
+  seedInput.addEventListener("change", () => { RECIPE.seed = Math.max(0, Math.floor(Number(seedInput.value) || 0)) >>> 0; seedInput.value = RECIPE.seed; if (hasContent) draw(); });
+  $("seed-shuffle").addEventListener("click", () => { RECIPE.seed = (RECIPE.seed * 1664525 + 1013904223) >>> 0; seedInput.value = RECIPE.seed; if (hasContent) draw(); });
+
+  // Drawer open/close with focus trap + Esc (a11y — B9).
+  const adjustBtn = $("adjust");
+  let drawerOpen = false, drawerKey = null;
+  function openDrawer() {
+    if (drawerOpen) return;
+    drawer.hidden = false; requestAnimationFrame(() => drawer.classList.add("open"));
+    drawerOpen = true; adjustBtn.setAttribute("aria-expanded", "true");
+    drawerKey = (e) => { if (e.key === "Escape") { e.preventDefault(); closeDrawer(); } else if (e.key === "Tab") trapTab(e, drawer); };
+    document.addEventListener("keydown", drawerKey, true);
+    const first = drawer.querySelector("button, input, select"); first && first.focus();
+  }
+  function closeDrawer() {
+    if (!drawerOpen) return;
+    drawer.classList.remove("open"); drawerOpen = false; adjustBtn.setAttribute("aria-expanded", "false");
+    document.removeEventListener("keydown", drawerKey, true);
+    setTimeout(() => { if (!drawerOpen) drawer.hidden = true; }, 220);
+    adjustBtn.focus();
+  }
+  adjustBtn.addEventListener("click", () => (drawerOpen ? closeDrawer() : openDrawer()));
+  $("drawer-close").addEventListener("click", closeDrawer);
+
+  // State mutations funnel through these so strip, panel, and canvas stay in sync —
+  // the same one mechanism the agent face (§8) drives. Param-only changes don't
+  // re-upload the source (sourceDirty stays false). Draw is deferred until there's
+  // content, so choosing a look before loading an image doesn't paint behind the hero.
+  function setLook(id) { RECIPE = makeRecipe(id); syncLookStrip(); syncPanel(); if (hasContent) draw(); }
+  function setRecipe(obj) { RECIPE = deserialiseRecipe(obj); syncLookStrip(); syncPanel(); if (hasContent) draw(); }
   function getRecipe() { return JSON.parse(serialiseRecipe(RECIPE)); }
 
-  buildLookStrip();
-  draw();
+  // Static strings (all through the lang map — §13)
+  $("open-image").textContent = t("openImage");
+  $("export").textContent = t("exportBtn");
+  $("save-preset").textContent = t("savePreset");
+  $("hero-title").textContent = t("heroTitle");
+  $("hero-sub").textContent = t("heroSub");
+  $("hero-open").textContent = t("heroOpen");
+  $("hero-sample").textContent = t("heroSample");
 
-  $("reload-sample").addEventListener("click", () => { variant = (variant + 1) % 6; draw(); });
+  // Adjust-drawer static strings + build the panel once, synced to RECIPE.
+  $("adjust").textContent = t("adjust");
+  $("drawer-title").textContent = t("drawerTitle");
+  $("seed-label").textContent = t("seedLabel");
+  $("help").textContent = t("helpBtn");
+  // a11y attribute strings through the map (locale-overridable — §13)
+  $("view").setAttribute("aria-label", t("a11yPreview"));
+  $("lookstrip").setAttribute("aria-label", t("a11yLooks"));
+  $("drawer").setAttribute("aria-label", t("adjust"));
+  $("drawer-close").setAttribute("aria-label", t("close"));
+  $("seed-shuffle").setAttribute("title", t("shuffleSeed"));
+  $("help").setAttribute("aria-label", t("help"));
+  $("help").setAttribute("title", t("help"));
+
+  buildLookStrip();
+  buildPanel();
+  syncPanel();
+  $("engine-status").textContent = t("engineReady", chainCount());   // footer live before first draw
+
+  /* ---- Before / after (B4): hold shows the untouched source ---- */
+  let peeking = false;
+  function drawOriginal() {
+    const src = currentSource();
+    const vx = view.getContext("2d");
+    vx.clearRect(0, 0, view.width, view.height);
+    vx.drawImage(src, 0, 0, view.width, view.height);
+  }
+  function peek(on) {
+    if (!hasContent) return;
+    if (on && !peeking) { peeking = true; drawOriginal(); }
+    else if (!on && peeking) { peeking = false; draw(); }
+  }
+  view.addEventListener("pointerdown", (e) => { if (e.button === 0) peek(true); });
+  for (const ev of ["pointerup", "pointerleave", "pointercancel"]) view.addEventListener(ev, () => peek(false));
+
+  /* ---- Help + intro modals (B8) ---- */
+  async function showHelp() {
+    const node = document.createElement("div");
+    const p = document.createElement("p"); p.textContent = t("privacyLine"); node.appendChild(p);
+    const dl = document.createElement("dl");
+    for (const [k, d] of t("shortcuts")) {
+      const dt = document.createElement("dt"); const kbd = document.createElement("kbd"); kbd.textContent = k; dt.appendChild(kbd);
+      const dd = document.createElement("dd"); dd.textContent = d;
+      dl.append(dt, dd);
+    }
+    node.appendChild(dl);
+    await openModal({ title: t("helpTitle"), node, actions: [{ label: t("close"), value: true, primary: true }], wide: true });
+  }
+  $("help").addEventListener("click", showHelp);
+
+  async function maybeShowIntro() {
+    if (store.get(STORE_KEYS.intro)) return;
+    await openModal({ title: t("introTitle"), body: t("introBody"), actions: [{ label: t("gotIt"), value: true, primary: true }] });
+    store.set(STORE_KEYS.intro, "1");
+  }
+
+  /* ---- Keyboard shortcuts (B9). Ignored while typing or a dialog is open,
+     except Space (before/after) and the always-safe combos. ---- */
+  const LOOK_KEYS = { "1": "sorrenti", "2": "corinne", "3": "disposable", "4": "mall", "0": "none" };
+  const typingIn = (el) => el && (el.tagName === "INPUT" || el.tagName === "SELECT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+  const modalOpen = () => !!document.querySelector(".modal-scrim");
+  document.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && (e.key === "s" || e.key === "S")) { e.preventDefault(); if (hasContent) exportImage(); return; }
+    if (typingIn(document.activeElement) || modalOpen()) return;   // Esc handled by drawer/modal owners
+    if (e.key === " " && !e.repeat) { e.preventDefault(); peek(true); return; }
+    if (e.key === "?" || (e.shiftKey && e.key === "/")) { e.preventDefault(); showHelp(); return; }
+    if (e.key in LOOK_KEYS) { e.preventDefault(); if (hasContent) setLook(LOOK_KEYS[e.key]); return; }
+  });
+  document.addEventListener("keyup", (e) => { if (e.key === " ") peek(false); });
+
+  // Topbar "Sample" cycles the fixed fixture set and switches back to sample mode.
+  $("reload-sample").addEventListener("click", () => {
+    sourceImage = null; variant = (variant + 1) % 6; sourceDirty = true; revealEditor(); draw(); refreshThumbs();
+  });
 
   // M0 harness / proto agent-face handle. The determinism verifier (A10) drives
-  // exactly these entry points — one pipeline, two doors (§8).
+  // exactly these entry points — one pipeline, two doors (§8). setVariant forces
+  // sample mode + a fresh upload so the gate's fixed image renders regardless of
+  // what's loaded interactively.
   window.__muse_m0 = {
     gl, engine, view, makeSampleImage,
     redraw: draw,
-    setVariant: (n) => { variant = ((n % 6) + 6) % 6; draw(); },
+    setVariant: (n) => { sourceImage = null; variant = ((n % 6) + 6) % 6; sourceDirty = true; hasContent = true; draw(); },
     getRecipe, setRecipe, setLook,
     serialiseRecipe, deserialiseRecipe, makeRecipe,
     LOOKS: LOOKS.map((l) => ({ id: l.id, name: l.name })),
@@ -1096,7 +1955,75 @@ function boot() {
     // what the M0 determinism page hashes.
     snapshot: () => view.getContext("2d").getImageData(0, 0, view.width, view.height).data,
   };
-  console.log("[muse] M0 harness up ·", chainCount(), "pass(es) · look:", RECIPE.look);
+
+  // i18n coverage hook for the M1 self-test: the live set of defined lang keys.
+  window.__muse_i18n = { locale: LOCALE, keys: Object.keys(LANG[LOCALE] || LANG.en) };
+
+  /* ---- Agent face (§8): window.muse, gated behind muse.dev, off by default.
+     Same pipeline the UI drives — one mechanism, two doors — and the headless
+     test surface for M1. applyLook renders an arbitrary source off to the side
+     and restores the interactive state after. Exports mark via:"agent". ---- */
+  const getLooks = () => LOOKS.map((l) => ({ id: l.id, name: l.name, params: JSON.parse(JSON.stringify(l.params || {})) }));
+
+  async function toDrawable(source) {
+    if (source instanceof Blob) return await createImageBitmap(source);
+    if (typeof ImageData !== "undefined" && source instanceof ImageData) return source;   // texImage2D accepts ImageData
+    if (source && source.width && (source.getContext || source.naturalWidth || source.close)) return source;   // canvas/bitmap/img
+    throw new Error("applyLook: source must be a Blob, ImageData, or drawable");
+  }
+  async function renderToPNG(recipe) {
+    const blob = await new Promise((res) => view.toBlob(res, "image/png"));
+    if (!blob) throw new Error("toBlob returned null");
+    const withRecipe = embedRecipePNG(new Uint8Array(await blob.arrayBuffer()), serialiseRecipe(recipe));
+    return new Blob([withRecipe], { type: "image/png" });
+  }
+  async function applyLook(source, lookIdOrParams, opts = {}) {
+    const img = await toDrawable(source);
+    const rec = typeof lookIdOrParams === "string" ? makeRecipe(lookIdOrParams) : deserialiseRecipe(lookIdOrParams);
+    if (opts.seed != null) rec.seed = opts.seed >>> 0;
+    rec.via = "agent";
+    const prev = RECIPE;                       // render off the current state, then restore
+    try {
+      RECIPE = rec;
+      engine.render(img); compositeTrim(canvas, view);
+      return await renderToPNG(rec);
+    } finally {
+      RECIPE = prev; sourceDirty = true; if (hasContent) draw();   // restore even if encoding throws
+    }
+  }
+  async function agentExport(opts = {}) {
+    if (!hasContent) throw new Error("muse.export: no image loaded");
+    const rec = Object.assign(getRecipe(), { via: "agent" });
+    if ((opts.format || "png") === "png") return renderToPNG(rec);
+    // JPEG path: COM-marker embed is deferred (§12); return the frame without a recipe.
+    return await new Promise((res) => view.toBlob(res, "image/jpeg", 0.92));
+  }
+  function installAgentFace() {
+    window.muse = { getLooks, applyLook, getRecipe: () => getRecipe(), setRecipe: (j) => setRecipe(j), export: agentExport };
+  }
+  // Dev toggle without a reload — the self-test flips this on; off by default (§8).
+  window.__museDev = (on) => {
+    if (on) { store.set(STORE_KEYS.dev, "1"); installAgentFace(); }
+    else { store.del(STORE_KEYS.dev); try { delete window.muse; } catch (_) { window.muse = undefined; } }
+    return !!store.get(STORE_KEYS.dev);
+  };
+  if (store.get(STORE_KEYS.dev)) installAgentFace();
+
+  // Expose the loaders + draw for the M1 editor layers (sliders, presets, export)
+  // and the M1 self-test to drive. Kept separate from the frozen M0 face above.
+  boot.editor = { loadFile, loadSample, setSource, setLook, setRecipe, getRecipe, draw,
+                  toast, revealEditor, get hasContent() { return hasContent; },
+                  markDirty: () => { sourceDirty = true; }, chainCount, view,
+                  // Preset hooks for the M1 self-test (same code the UI drives).
+                  presetAPI: {
+                    save(name) { presets.push({ name, recipe: getRecipe() }); savePresets(); buildLookStrip(); syncLookStrip(); refreshThumbs(); return presets.length; },
+                    list() { return presets.map((p) => p.name); },
+                    apply(i) { setRecipe(presets[i].recipe); },
+                    clear() { presets.length = 0; savePresets(); buildLookStrip(); syncLookStrip(); },
+                  } };
+
+  maybeShowIntro();
+  console.log("[muse] editor up ·", chainCount(), "pass(es) · look:", RECIPE.look);
 }
 
 document.addEventListener("DOMContentLoaded", boot);

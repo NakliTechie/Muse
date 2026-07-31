@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'">
+<meta name="version" content="0.1.0-m1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230b0b0d'/%3E%3Ccircle cx='8' cy='8' r='4.5' fill='none' stroke='%23d8c08a' stroke-width='1.6'/%3E%3Ccircle cx='8' cy='8' r='1.6' fill='%23d8c08a'/%3E%3C/svg%3E">
+<title>Muse — M1 self-test</title>
+<style>
+  :root { --bg:#0b0b0d; --surface:#16161a; --ink:#ececf0; --accent:#d8c08a; --muted:#8a8a93; --danger:#e06a5a; --ok:#5ec08a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 16px; max-width: 760px; }
+  .banner { display: inline-block; font-weight: 600; padding: 10px 16px; border-radius: 9px; border: 1px solid; margin-bottom: 16px; }
+  .banner[data-state="run"]  { color: var(--muted);  border-color: #ffffff20; }
+  .banner[data-state="pass"] { color: var(--ok);     border-color: #5ec08a55; }
+  .banner[data-state="fail"] { color: var(--danger); border-color: #e06a5a66; }
+  table { border-collapse: collapse; width: 100%; max-width: 900px; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #ffffff12; vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  td.r { font-weight: 600; }
+  td.r[data-ok="1"] { color: var(--ok); } td.r[data-ok="0"] { color: var(--danger); }
+  .note { color: var(--muted); font-size: 12px; }
+  code { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); }
+  iframe { position: absolute; width: 1024px; height: 768px; left: -3000px; top: 0; border: 0; }
+</style>
+</head>
+<body>
+  <h1>Muse — M1 self-test</h1>
+  <p class="sub">Drives the deployed editor through its own agent face (§8) in a fresh
+  frame: recipe round-trips through a real export, applyLook is hash-stable, presets
+  save/load, and every UI string routes through the lang map. Machine gate — never
+  self-report. Result mirrored to the console and <code>window.__m1_gate</code>.</p>
+  <div class="banner" id="banner" data-state="run">Running…</div>
+  <table>
+    <thead><tr><th>Check</th><th>Result</th><th>Evidence</th></tr></thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <iframe id="app" src="index.html" title="app under test"></iframe>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const rows = [];
+function addRow(name, ok, evidence) {
+  rows.push({ name, ok, evidence });
+  const tr = document.createElement("tr");
+  const td1 = document.createElement("td"); td1.textContent = name;
+  const td2 = document.createElement("td"); td2.className = "r"; td2.dataset.ok = ok ? "1" : "0"; td2.textContent = ok ? "PASS" : "FAIL";
+  const td3 = document.createElement("td"); td3.className = "note"; td3.textContent = evidence;
+  tr.append(td1, td2, td3);
+  $("tbody").appendChild(tr);
+}
+
+function waitForHarness(w) {
+  return new Promise((res, rej) => {
+    let n = 0;
+    const iv = setInterval(() => {
+      if (w && w.__muse_m0 && w.boot && w.boot.editor && typeof w.__museDev === "function") { clearInterval(iv); res(w); }
+      else if (++n > 100) { clearInterval(iv); rej(new Error("harness never came up")); }
+    }, 50);
+  });
+}
+const serial = (w, r) => w.__muse_m0.serialiseRecipe(w.__muse_m0.deserialiseRecipe(r));
+const bytesEqual = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+
+async function run() {
+  const iframe = $("app");
+  const w = await waitForHarness(iframe.contentWindow);
+  w.__museDev(true);                       // install the agent face for the test
+  const muse = w.muse, ed = w.boot.editor;
+  ed.loadSample();                         // give the editor content (export needs a frame)
+
+  // 0) boot completed cleanly (both faces present) — proxy for no fatal boot error
+  addRow("boot: agent + editor faces present", !!(muse && ed && w.__muse_m0),
+    "window.muse + boot.editor + __muse_m0 all defined");
+
+  // 1) i18n key coverage: every t("key") used is defined in LANG; no hardcoded
+  //    visible-text literals assigned to textContent/placeholder.
+  {
+    const script = iframe.contentDocument.querySelector("script").textContent;
+    const defined = new Set(w.__muse_i18n.keys);
+    const used = new Set();
+    for (const m of script.matchAll(/\bt\(\s*["'`]([A-Za-z0-9_]+)["'`]/g)) used.add(m[1]);
+    const missing = [...used].filter((k) => !defined.has(k));
+    addRow("i18n: all t() keys defined in lang map", missing.length === 0,
+      missing.length ? "missing: " + missing.join(", ") : `${used.size} keys used, all defined`);
+
+    const hard = [];
+    for (const m of script.matchAll(/\.(textContent|placeholder)\s*=\s*(["'])((?:(?!\2).)*)\2/g)) {
+      if (/[A-Za-z]{2,}/.test(m[3])) hard.push(m[3]);   // word-like literal, not via t()
+    }
+    addRow("i18n: no hardcoded visible-text literals", hard.length === 0,
+      hard.length ? "hardcoded: " + hard.map((s) => JSON.stringify(s)).join(", ") : "textContent/placeholder all via t()");
+  }
+
+  // 2) recipe round-trips through a REAL export (embed → re-read → param-equal)
+  {
+    const R = { look: "disposable", seed: 7, params: {} };
+    muse.setRecipe(R);
+    const want = serial(w, muse.getRecipe());
+    const blob = await muse.export({ format: "png" });
+    const readStr = readRecipeFromPNG(new Uint8Array(await blob.arrayBuffer()));
+    const got = readStr ? serial(w, JSON.parse(readStr)) : null;
+    addRow("recipe round-trips through a real export", got === want,
+      got === want ? "embed → re-read → param-equal" : "mismatch or no recipe chunk");
+  }
+
+  // 3) applyLook is hash-stable for the same source + look + seed
+  {
+    const c = iframe.contentDocument.createElement("canvas"); c.width = 200; c.height = 150;
+    const x = c.getContext("2d"); x.fillStyle = "#7a4b34"; x.fillRect(0, 0, 200, 150);
+    x.fillStyle = "#fff"; x.fillRect(140, 12, 44, 44);
+    const b1 = new Uint8Array(await (await muse.applyLook(c, "sorrenti", { seed: 3 })).arrayBuffer());
+    const b2 = new Uint8Array(await (await muse.applyLook(c, "sorrenti", { seed: 3 })).arrayBuffer());
+    const rec = JSON.parse(readRecipeFromPNG(b1) || "{}");
+    addRow("applyLook is hash-stable (same source+seed)", bytesEqual(b1, b2) && rec.via === "agent",
+      bytesEqual(b1, b2) ? `identical ${b1.length}B blob · via:"${rec.via}"` : "blobs differ");
+  }
+
+  // 4) presets save + load through the same code the UI uses
+  {
+    ed.presetAPI.clear();
+    ed.loadSample();
+    muse.setRecipe({ look: "mall", seed: 5, params: {} });
+    const target = serial(w, muse.getRecipe());
+    ed.presetAPI.save("selftest-preset");
+    const listed = ed.presetAPI.list().includes("selftest-preset");
+    muse.setRecipe({ look: "none", seed: 1, params: {} });   // move away
+    ed.presetAPI.apply(0);                                     // load it back
+    const restored = serial(w, muse.getRecipe()) === target;
+    ed.presetAPI.clear();
+    addRow("presets save + load (recipe preserved)", listed && restored,
+      listed && restored ? "saved, listed, applied → recipe equal" : `listed:${listed} restored:${restored}`);
+  }
+
+  const allPass = rows.every((r) => r.ok);
+  $("banner").dataset.state = allPass ? "pass" : "fail";
+  $("banner").textContent = allPass ? `PASS — all ${rows.length} checks` : "FAIL — see rows";
+  window.__m1_gate = { allPass, results: rows };
+  console.log("[m1-selftest]", allPass ? "PASS" : "FAIL", JSON.stringify(rows));
+}
+
+// Minimal PNG tEXt reader (keyword "muse") — independent of the app's own copy so
+// the test doesn't trust the code it's testing to also read back its own output.
+function readRecipeFromPNG(png) {
+  if (png.length < 8 || png[0] !== 0x89 || png[1] !== 0x50) return null;
+  const dv = new DataView(png.buffer, png.byteOffset, png.byteLength);
+  let p = 8;
+  const str = (a) => { let s = ""; for (let i = 0; i < a.length; i++) s += String.fromCharCode(a[i]); return s; };
+  while (p + 8 <= png.length) {
+    const len = dv.getUint32(p);
+    const type = str(png.subarray(p + 4, p + 8));
+    if (type === "tEXt") {
+      const data = png.subarray(p + 8, p + 8 + len);
+      const z = data.indexOf(0);
+      if (z >= 0 && str(data.subarray(0, z)) === "muse") return str(data.subarray(z + 1));
+    }
+    if (type === "IEND") break;
+    p = p + 8 + len + 4;
+  }
+  return null;
+}
+
+window.addEventListener("load", () => {
+  run().catch((e) => {
+    console.error("[m1-selftest] error:", e);
+    $("banner").dataset.state = "fail";
+    $("banner").textContent = "FAIL — " + (e && e.message || e);
+    window.__m1_gate = { allPass: false, error: String(e && e.message || e) };
+  });
+});
+</script>
+</body>
+</html>
