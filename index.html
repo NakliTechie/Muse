@@ -127,6 +127,14 @@
     object-fit: cover; margin-bottom: 5px; background: #000;
   }
   .look.has-thumb { padding: 6px; border-radius: 9px; text-align: center; font-size: 11px; }
+  .preset-wrap { display: inline-flex; align-items: stretch; }
+  .preset-wrap .look { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .look-del {
+    appearance: none; border: 1px solid #ffffff18; border-left: none; background: #ffffff08;
+    color: var(--muted); cursor: pointer; padding: 0 8px; font-size: 11px;
+    border-radius: 0 999px 999px 0;
+  }
+  .look-del:hover { color: var(--danger); background: #ffffff14; }
 
   /* Drop-zone hero — shown until an image loads. Never a blank canvas (§4). */
   .hero {
@@ -367,6 +375,19 @@ const LANG = {
       ["Esc", "Close the panel or a dialog"],
     ],
     gotIt: "Got it",
+    // Presets
+    savePresetTitle: "Save preset",
+    presetNamePlaceholder: "Preset name",
+    save: "Save",
+    cancel: "Cancel",
+    exportJson: "Export .muse.json",
+    importJson: "Import .muse.json",
+    presetSaved: (n) => `Saved preset “${n}”.`,
+    presetDeleted: "Preset deleted.",
+    jsonInvalid: "That isn't a valid .muse.json recipe.",
+    jsonImported: "Recipe imported.",
+    deletePreset: (n) => `Delete preset ${n}`,
+    unnamed: "Untitled",
     introTitle: "Welcome to Muse",
     introBody: "Drop a photo, pick a 90s film look, tune it with the deep sliders, and export. Everything runs on your device — nothing is uploaded. Every export carries its recipe, so dropping the image back in restores the exact edit.",
     // Adjust drawer
@@ -1594,8 +1615,15 @@ function boot() {
   window.addEventListener("dragover", (e) => e.preventDefault());
   window.addEventListener("drop", (e) => e.preventDefault());
 
-  // Look strip — one pill per look; active reflects RECIPE.look.
+  // Look strip — one pill per look, then custom presets (B5). Active state:
+  // a preset if the current recipe matches one exactly, else the base look.
   const strip = $("lookstrip");
+  let presets = (() => {
+    try { const a = JSON.parse(store.get(STORE_KEYS.presets) || "[]"); return Array.isArray(a) ? a : []; }
+    catch (_) { return []; }
+  })();
+  const savePresets = () => store.set(STORE_KEYS.presets, JSON.stringify(presets));
+
   function buildLookStrip() {
     strip.textContent = "";
     const lbl = document.createElement("span");
@@ -1605,20 +1633,72 @@ function boot() {
     const names = t("lookNames");
     for (const lk of LOOKS) {
       const b = document.createElement("button");
-      b.type = "button";
-      b.className = "look";
-      b.dataset.look = lk.id;
+      b.type = "button"; b.className = "look"; b.dataset.look = lk.id;
       b.textContent = names[lk.id] || lk.name;
-      b.setAttribute("aria-pressed", String(RECIPE.look === lk.id));
       b.addEventListener("click", () => setLook(lk.id));
       strip.appendChild(b);
     }
+    presets.forEach((pr, i) => {
+      const wrap = document.createElement("span"); wrap.className = "preset-wrap";
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "look"; b.dataset.preset = String(i);
+      b.textContent = pr.name || t("unnamed");
+      b.addEventListener("click", () => setRecipe(pr.recipe));
+      const del = document.createElement("button");
+      del.type = "button"; del.className = "look-del"; del.textContent = "✕";
+      del.setAttribute("aria-label", t("deletePreset", pr.name || t("unnamed")));
+      del.addEventListener("click", (e) => { e.stopPropagation(); presets.splice(i, 1); savePresets(); buildLookStrip(); syncLookStrip(); toast(t("presetDeleted")); });
+      wrap.append(b, del); strip.appendChild(wrap);
+    });
   }
   function syncLookStrip() {
+    const cur = serialiseRecipe(RECIPE);
+    const activePreset = presets.findIndex((pr) => serialiseRecipe(deserialiseRecipe(pr.recipe)) === cur);
     for (const b of strip.querySelectorAll(".look")) {
-      b.setAttribute("aria-pressed", String(b.dataset.look === RECIPE.look));
+      if (b.dataset.preset != null) b.setAttribute("aria-pressed", String(+b.dataset.preset === activePreset));
+      else b.setAttribute("aria-pressed", String(activePreset < 0 && b.dataset.look === RECIPE.look));
     }
   }
+
+  /* ---- Presets: save (localStorage) + .muse.json import/export (own transport) ---- */
+  function downloadBlob(blob, name) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  const presetFileInput = document.createElement("input");
+  presetFileInput.type = "file"; presetFileInput.accept = ".muse.json,.json,application/json";
+  presetFileInput.className = "visually-hidden";
+  document.body.appendChild(presetFileInput);
+  presetFileInput.addEventListener("change", async () => {
+    const f = presetFileInput.files && presetFileInput.files[0]; presetFileInput.value = "";
+    if (!f) return;
+    try { setRecipe(deserialiseRecipe(JSON.parse(await f.text()))); toast(t("jsonImported")); }
+    catch (e) { console.error("[muse] json import failed:", e); toast(t("jsonInvalid"), "err"); }
+  });
+  async function doSavePreset() {
+    const node = document.createElement("div");
+    const input = document.createElement("input");
+    input.className = "field"; input.type = "text"; input.placeholder = t("presetNamePlaceholder"); input.maxLength = 40;
+    node.appendChild(input);
+    const row = document.createElement("div"); row.style.cssText = "display:flex;gap:8px;margin-top:12px;flex-wrap:wrap";
+    const exp = document.createElement("button"); exp.type = "button"; exp.className = "btn"; exp.textContent = t("exportJson");
+    exp.addEventListener("click", () => downloadBlob(new Blob([serialiseRecipe(RECIPE)], { type: "application/json" }), `muse-${RECIPE.look}.muse.json`));
+    const imp = document.createElement("button"); imp.type = "button"; imp.className = "btn"; imp.textContent = t("importJson");
+    imp.addEventListener("click", () => presetFileInput.click());
+    row.append(exp, imp); node.appendChild(row);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); const ok = node.closest(".modal").querySelector(".btn.primary"); ok && ok.click(); } });
+    setTimeout(() => input.focus(), 0);
+    const ok = await openModal({ title: t("savePresetTitle"), node, actions: [{ label: t("save"), value: true, primary: true }, { label: t("cancel"), value: false }], dismissValue: false });
+    if (ok) {
+      const name = (input.value || "").trim() || t("unnamed");
+      presets.push({ name, recipe: getRecipe() });
+      savePresets(); buildLookStrip(); syncLookStrip();
+      toast(t("presetSaved", name));
+    }
+  }
+  $("save-preset").addEventListener("click", doSavePreset);
 
   /* ---- Slider panel (B3): fieldset per pass, per-pass bypass, tokenised ranges.
      panelSync[] holds one updater per control so a look/recipe change reflects
