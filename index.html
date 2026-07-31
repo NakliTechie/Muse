@@ -84,7 +84,7 @@
     display: flex; align-items: center; gap: 8px;
     padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
     border-top: 1px solid #ffffff12;
-    overflow-x: auto;
+    overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none;
   }
   .actionbar .btn { min-height: 44px; flex: 0 0 auto; }
   /* Export is the primary output — pin it to the right so it is ALWAYS visible,
@@ -114,10 +114,11 @@
   .fatal p { color: var(--muted); margin: 0 0 12px; }
   .fatal ul { color: var(--muted); margin: 0; padding-left: 18px; }
   .hint { color: var(--muted); font-size: 12px; }
+  /* One button language: same border / fill / 10px radius for actions, look pills, icons. */
   .btn {
-    appearance: none; border: 1px solid #ffffff20; background: #ffffff0d;
-    color: var(--ink); border-radius: 8px; padding: 7px 12px; cursor: pointer;
-    font: inherit;
+    appearance: none; border: 1px solid #ffffff1f; background: #ffffff0d;
+    color: var(--ink); border-radius: 10px; padding: 8px 14px; cursor: pointer;
+    font: inherit; min-height: 40px;
   }
   .btn:hover { background: #ffffff16; }
 
@@ -125,41 +126,51 @@
      thumbnail previews per look; name-forward under each thumb. */
   .lookstrip {
     display: flex; align-items: flex-end; gap: 8px;
-    padding: 8px 12px;
+    padding: 8px 14px;
     flex: 0 0 auto;
     overflow-x: auto;
     scroll-snap-type: x proximity;
     -webkit-overflow-scrolling: touch;
+    /* Hide the native scrollbar (Instagram-style filter row); fade the edges so
+       "there's more →" still reads. */
+    scrollbar-width: none; -ms-overflow-style: none;
+    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
+            mask-image: linear-gradient(to right, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
   }
+  .lookstrip::-webkit-scrollbar, .actionbar::-webkit-scrollbar { display: none; }
   .lookstrip .look { scroll-snap-align: start; }
   .lookstrip .lbl { display: none; }   /* the thumbnails name themselves */
   .look {
-    appearance: none; border: 1px solid #ffffff18; background: #ffffff08;
-    color: var(--ink); border-radius: 999px; padding: 6px 14px; cursor: pointer;
-    font: inherit; white-space: nowrap;
+    appearance: none; border: 1px solid #ffffff1f; background: #ffffff0d;
+    color: var(--ink); border-radius: 10px; padding: 8px 14px; cursor: pointer;
+    font: inherit; white-space: nowrap; min-height: 40px;
+    display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
   }
-  .look:hover { background: #ffffff14; }
+  .look:hover { background: #ffffff16; }
   .look:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .look[aria-pressed="true"] {
     border-color: var(--accent); color: var(--accent); background: #d8c08a14;
   }
+  .look:not(.has-thumb) .era { display: none; }   /* text-only pills stay uniform single-line */
   .look .thumb {
     display: none; width: 76px; height: 57px; border-radius: 6px;
     object-fit: cover; margin-bottom: 5px; background: #000;
   }
   .look.has-thumb .thumb { display: block; }
-  .look.has-thumb { padding: 6px; border-radius: 9px; text-align: center; font-size: 11px; line-height: 1.2; }
+  .look.has-thumb { padding: 6px; border-radius: 10px; text-align: center; font-size: 11px; line-height: 1.2; }
   /* Let long look names (Daguerreotype, Cross-process) wrap to 2 lines, not clip (G-L6). */
   .look.has-thumb .name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: normal; overflow: hidden; }
   .look .era { display: block; font-size: 9px; color: var(--accent); opacity: .75; letter-spacing: .04em; margin-top: 1px; }
+  /* Thin divider between the "Start here" cluster and the era timeline. */
+  .deck-div { flex: 0 0 auto; align-self: stretch; width: 1px; margin: 8px 5px; background: #ffffff1a; }
   .preset-wrap { display: inline-flex; align-items: stretch; }
   .preset-wrap .look { border-top-right-radius: 0; border-bottom-right-radius: 0; }
   .look-del {
-    appearance: none; border: 1px solid #ffffff18; border-left: none; background: #ffffff08;
-    color: var(--muted); cursor: pointer; padding: 0 8px; font-size: 11px;
-    border-radius: 0 999px 999px 0;
+    appearance: none; border: 1px solid #ffffff1f; border-left: none; background: #ffffff0d;
+    color: var(--muted); cursor: pointer; padding: 0 10px; font-size: 12px;
+    border-radius: 0 10px 10px 0;
   }
-  .look-del:hover { color: var(--danger); background: #ffffff14; }
+  .look-del:hover { color: var(--danger); background: #ffffff16; }
 
   /* Drop-zone hero — shown until an image loads. Never a blank canvas (§4). */
   .hero {
@@ -267,7 +278,7 @@
   .drawer-head .seed input { width: 62px; }
   .icon-btn {
     appearance: none; background: #ffffff0d; border: 1px solid #ffffff20; color: var(--ink);
-    border-radius: 8px; width: 40px; height: 40px; cursor: pointer; font-size: 16px; line-height: 1;
+    border-radius: 10px; width: 40px; height: 40px; cursor: pointer; font-size: 16px; line-height: 1;
     display: grid; place-items: center;   /* 40px touch target (G-M2/M6) */
   }
   .icon-btn:hover { background: #ffffff16; }
@@ -776,6 +787,11 @@ const LOOKS = [
       grain: { bypass: false, amount: 0.1, size: 1 },
       trim: { bypass: false, aspect: "4:3", border: 0, stamp: false, matte: false } } },
 ];
+
+/* "Start here" cluster (G-H3): the brand/hero looks a newcomer wants first, pinned to
+   the front of the deck so they aren't buried in the chronological timeline. The rest of
+   LOOKS follows in era order behind a divider. */
+const FEATURED = ["none", "sorrenti", "corinne", "disposable", "mall", "polaroid"];
 
 /* Deep-merge preset overrides onto defaults. Arrays (vec3s) replace wholesale —
    a preset gives a complete offset triple, never a partial one. */
@@ -1730,6 +1746,8 @@ function boot() {
   let sourceImage = null;   // loaded user image (ImageBitmap/canvas); null → procedural sample
   let sourceDirty = true;   // GPU source needs (re)upload before next render
   let hasContent = false;   // something has been rendered → hero dismissed, editor live
+  const thumbCanvas = document.createElement("canvas");  // offscreen: thumbs never touch #view
+  let thumbGen = 0;         // generation guard so a user action aborts an in-flight thumb pass
 
   // Full-chain count: active GL passes + the trim compositor when enabled.
   const chainCount = () => engine.activeCount() + (RECIPE.params.trim.bypass ? 0 : 1);
@@ -1890,12 +1908,9 @@ function boot() {
 
   function buildLookStrip() {
     strip.textContent = "";
-    const lbl = document.createElement("span");
-    lbl.className = "lbl";
-    lbl.textContent = t("lookLabel");
-    strip.appendChild(lbl);
     const names = t("lookNames");
-    for (const lk of LOOKS) {
+    const byId = Object.fromEntries(LOOKS.map((l) => [l.id, l]));
+    const mkPill = (lk) => {
       const b = document.createElement("button");
       b.type = "button"; b.className = "look"; b.dataset.look = lk.id;
       const img = document.createElement("img"); img.className = "thumb"; img.alt = "";
@@ -1904,8 +1919,12 @@ function boot() {
       // Era decade label (a prop, locale-independent like the date stamp — §13).
       if (lk.era) { const e = document.createElement("span"); e.className = "era"; e.textContent = lk.era; b.appendChild(e); }
       b.addEventListener("click", () => setLook(lk.id));
-      strip.appendChild(b);
-    }
+      return b;
+    };
+    // "Start here" cluster first (brand looks), then a divider, then the rest in era order.
+    for (const id of FEATURED) { if (byId[id]) strip.appendChild(mkPill(byId[id])); }
+    const div = document.createElement("span"); div.className = "deck-div"; div.setAttribute("aria-hidden", "true"); strip.appendChild(div);
+    for (const lk of LOOKS) { if (!FEATURED.includes(lk.id)) strip.appendChild(mkPill(lk)); }
     presets.forEach((pr, i) => {
       const wrap = document.createElement("span"); wrap.className = "preset-wrap";
       const b = document.createElement("button");
@@ -1972,23 +1991,33 @@ function boot() {
   /* ---- Look-deck thumbnails (B2): each base-look pill previews that look on the
      loaded image. Rendered small off the current state, then restored. Refreshed
      only on a source change (not on every look switch — the source is what varies). ---- */
+  // Render each look's preview to the OFFSCREEN thumbCanvas (never #view → no flicker),
+  // one per animation frame so the first look paints instantly and the deck fills without
+  // freezing (G-M3). A generation guard aborts the pass if the user acts mid-flight, so the
+  // shared RECIPE is never left on a thumb's look.
   function refreshThumbs() {
     if (!hasContent) return;
+    const gen = ++thumbGen;
+    const prev = RECIPE;
     const src = currentSource();
     const tw = 152, th = Math.max(1, Math.round(tw * (src.height / src.width))) || 114;
     const small = document.createElement("canvas"); small.width = tw; small.height = th;
     small.getContext("2d").drawImage(src, 0, 0, tw, th);
-    const prev = RECIPE;
-    try {
-      for (const b of strip.querySelectorAll(".look[data-look]")) {
+    const pills = [...strip.querySelectorAll(".look[data-look]")];
+    let i = 0;
+    const step = () => {
+      if (gen !== thumbGen) return;                 // superseded (user acted / newer pass) — stop, don't restore
+      if (i >= pills.length) { RECIPE = prev; sourceDirty = true; draw(); return; }  // done → restore live view
+      const b = pills[i++];
+      try {
         RECIPE = makeRecipe(b.dataset.look);
-        engine.render(small); compositeTrim(canvas, view);
+        engine.render(small); compositeTrim(canvas, thumbCanvas);   // offscreen
         const img = b.querySelector("img.thumb");
-        if (img) { img.src = view.toDataURL("image/jpeg", 0.72); b.classList.add("has-thumb"); }
-      }
-    } finally {
-      RECIPE = prev; sourceDirty = true; draw();   // restore even if a render throws
-    }
+        if (img) { img.src = thumbCanvas.toDataURL("image/jpeg", 0.72); b.classList.add("has-thumb"); }
+      } catch (_) {}
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
   }
 
   /* ---- Slider panel (B3): fieldset per pass, per-pass bypass, tokenised ranges.
@@ -2111,8 +2140,8 @@ function boot() {
   // the same one mechanism the agent face (§8) drives. Param-only changes don't
   // re-upload the source (sourceDirty stays false). Draw is deferred until there's
   // content, so choosing a look before loading an image doesn't paint behind the hero.
-  function setLook(id) { RECIPE = makeRecipe(id); syncLookStrip(); syncPanel(); if (hasContent) draw(); else loadDefaultSample(); }
-  function setRecipe(obj) { RECIPE = deserialiseRecipe(obj); syncLookStrip(); syncPanel(); if (hasContent) draw(); }
+  function setLook(id) { thumbGen++; RECIPE = makeRecipe(id); syncLookStrip(); syncPanel(); if (hasContent) draw(); else loadDefaultSample(); }
+  function setRecipe(obj) { thumbGen++; RECIPE = deserialiseRecipe(obj); syncLookStrip(); syncPanel(); if (hasContent) draw(); }
   function getRecipe() { return JSON.parse(serialiseRecipe(RECIPE)); }
 
   // Static strings (all through the lang map — §13)
