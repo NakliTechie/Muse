@@ -221,6 +221,13 @@
   .sample img { display: block; width: 100%; height: 58px; object-fit: cover; border-radius: 6px; background: #000; }
   .sample span { display: block; font-size: 10px; color: var(--muted); margin-top: 3px; text-align: center; }
   .gallery-credit { margin-top: 8px; color: var(--muted); font-size: 10px; text-align: center; opacity: .7; }
+  /* Discreet sibling-project footer — quiet by default, brightens on hover. */
+  .sib-links { margin-top: 26px; display: flex; flex-wrap: wrap; justify-content: center; align-items: center;
+    gap: 4px 8px; font-size: 11px; color: var(--muted); opacity: .55; }
+  .sib-links #sib-label { margin-right: 2px; }
+  .sib-links a { color: var(--muted); text-decoration: none; border-bottom: 1px solid transparent; padding: 2px 0; }
+  .sib-links a:hover, .sib-links a:focus-visible { color: var(--ink); border-bottom-color: #ffffff40; outline: none; }
+  .sib-links .sep { opacity: .5; }
   .btn.primary { border-color: var(--accent); color: var(--accent); background: #d8c08a12; }
   .btn.primary:hover { background: #d8c08a20; }
 
@@ -395,6 +402,16 @@
         <div class="gallery-label" id="sample-label"></div>
         <div class="samples" id="hero-samples" role="list" aria-label="Sample photos"></div>
         <div class="gallery-credit" id="sample-credit"></div>
+        <!-- Discreet cross-links to the sibling art/style tools. Same-family naklitechie
+             subdomains; plain <a> navigation (no fetch → no CSP impact). -->
+        <footer class="sib-links">
+          <span id="sib-label"></span>
+          <a href="https://hueandcry.naklitechie.com/" target="_blank" rel="noopener">Hue &amp; Cry</a>
+          <span class="sep" aria-hidden="true">·</span>
+          <a href="https://rangrez.naklitechie.com/" target="_blank" rel="noopener">Rangrez</a>
+          <span class="sep" aria-hidden="true">·</span>
+          <a href="https://mixer.naklitechie.com/" target="_blank" rel="noopener">Colour Mixer</a>
+        </footer>
       </div>
     </div>
   </main>
@@ -470,6 +487,7 @@ const LANG = {
     heroSample: "Try a sample",
     sampleLabel: "— or try one of these —",
     sampleCredit: "Sample photos: CC0 (public domain) · StockSnap",
+    sibLabel: "More from NakliTechie:",
     toastUnreadable: "That file isn't a supported image. Accepted: PNG, JPEG, WebP.",
     toastDownscaled: (mp) => `Large image (${mp}MP) — preview downscaled for speed; export uses full detail where memory allows.`,
     toastDecodeFail: "Couldn't read that image — it may be corrupt.",
@@ -2270,6 +2288,7 @@ function boot() {
   $("hero-open").textContent = t("heroOpen");
   $("sample-label").textContent = t("sampleLabel");
   $("sample-credit").textContent = t("sampleCredit");
+  $("sib-label").textContent = t("sibLabel");
   buildSampleGallery();
 
   // Adjust-drawer static strings + build the panel once, synced to RECIPE.
