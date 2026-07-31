@@ -12,7 +12,7 @@
 -->
 <meta http-equiv="Content-Security-Policy"
       content="default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'">
-<meta name="version" content="0.0.3-m0">
+<meta name="version" content="0.0.4-m0">
 <title>Muse</title>
 <style>
   :root {
@@ -174,7 +174,7 @@ const LANG = {
       mall: "Mall Studio",
     },
     engineReady: (n) => `WebGL2 ready · ${n} pass${n === 1 ? "" : "es"} in chain`,
-    version: "v0.0.3 · M0",
+    version: "v0.0.4 · M0",
     fatalTitle: "WebGL2 isn't available",
     fatalBody: "Muse renders every look with a single WebGL2 shader chain — there's no fallback path by design. Your browser or device didn't provide a WebGL2 context.",
     fatalList: [
@@ -279,7 +279,7 @@ void main() {
  * is exactly what slope/offset/power express: offset lifts/crushes blacks,
  * slope tilts the cast, power bends midtones, sat mutes or pushes colour.
  * ========================================================================= */
-const VERSION_ID = "0.0.3-m0";
+const VERSION_ID = "0.0.4-m0";
 const DEFAULT_SEED = 1;
 
 /* Default params for the whole 8-pass chain. Only `curve` is active in A2;
@@ -308,23 +308,28 @@ const LOOKS = [
       curve: { slope: [1.02, 1.04, 0.94], offset: [0.05, 0.055, 0.03], power: [0.95, 0.92, 1.02], sat: 0.82 },
       defocus: { bypass: false, radius: 2.0, radial: 0.85, blend: 1 },
       aberration: { bypass: false, amount: 1.4 },
-      flash: { bypass: false, strength: 0.35, radius: 0.5, softness: 0.25, vignette: 0.3 } } },
+      flash: { bypass: false, strength: 0.35, radius: 0.5, softness: 0.25, vignette: 0.3 },
+      halation: { bypass: false, threshold: 0.68, strength: 0.6, radius: 3, tint: [1, 0.42, 0.32] } } },
   { id: "corinne", name: "Corinne Day", params: {
-      // grey cast, low contrast, cool daylight · no flash, no defocus (§4)
-      curve: { slope: [0.90, 0.92, 0.95], offset: [0.06, 0.06, 0.07], power: [1.0, 1.0, 0.98], sat: 0.85 } } },
+      // grey cast, low contrast, cool daylight · no flash, no defocus, minimal
+      // halation (§4: minimal ≠ none)
+      curve: { slope: [0.90, 0.92, 0.95], offset: [0.06, 0.06, 0.07], power: [1.0, 1.0, 0.98], sat: 0.85 },
+      halation: { bypass: false, threshold: 0.82, strength: 0.15, radius: 2, tint: [1, 0.85, 0.75] } } },
   { id: "disposable", name: "Disposable", params: {
       // warm, crushed shadows, oversaturated · plastic-lens edge blur + fringe ·
       // harsh full-frame flash, deep vignette
       curve: { slope: [1.12, 1.06, 0.92], offset: [-0.04, -0.03, -0.03], power: [1.05, 1.02, 1.05], sat: 1.22 },
       defocus: { bypass: false, radius: 2.6, radial: 1.0, blend: 1 },
       aberration: { bypass: false, amount: 2.4 },
-      flash: { bypass: false, strength: 0.5, radius: 0.8, softness: 0.45, vignette: 0.55 } } },
+      flash: { bypass: false, strength: 0.5, radius: 0.8, softness: 0.45, vignette: 0.55 },
+      halation: { bypass: false, threshold: 0.75, strength: 0.35, radius: 2.5, tint: [1, 0.6, 0.5] } } },
   { id: "mall", name: "Mall Studio", params: {
       // warm, glowy, lifted everything · full soft-focus (uniform, part-blended) ·
       // soft omni flash
       curve: { slope: [1.04, 1.02, 0.98], offset: [0.06, 0.05, 0.04], power: [0.92, 0.92, 0.95], sat: 1.05 },
       defocus: { bypass: false, radius: 3.2, radial: 0, blend: 0.6 },
-      flash: { bypass: false, strength: 0.22, radius: 0.95, softness: 0.7, vignette: 0.12 } } },
+      flash: { bypass: false, strength: 0.22, radius: 0.95, softness: 0.7, vignette: 0.12 },
+      halation: { bypass: false, threshold: 0.55, strength: 0.55, radius: 4, tint: [1, 0.9, 0.8] } } },
 ];
 
 /* Deep-merge preset overrides onto defaults. Arrays (vec3s) replace wholesale —
@@ -483,10 +488,66 @@ void main() {
   o = vec4(clamp(src.rgb * flash * vig, 0.0, 1.0), src.a);
 }`;
 
+/* Halation (pass 5): threshold → blurH → blurV → screen, per §5. A multi-step
+   pass — the engine keeps the pass input alive as `u_base` while the glow is
+   extracted and blurred, then the composite screens the tinted glow over it.
+   Step shaders sample v_uv directly (never flipped): the engine guarantees a
+   multi-step pass is never the chain entry by prepending the identity blit. */
+const HAL_THRESH_FRAG = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+uniform sampler2D u_src;
+uniform vec2 u_res;
+uniform float u_threshold;
+out vec4 o;
+void main() {
+  vec3 c = texture(u_src, v_uv).rgb;
+  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  float k = smoothstep(u_threshold, 1.0, l);   // soft knee, no hard clip line
+  o = vec4(c * k, 1.0);
+}`;
+
+/* Separable 9-tap normalised Gaussian (weights are the standard discrete
+   Gaussian samples). `u_spread` scales tap spacing in px — wider glow without
+   more taps; deterministic. */
+const HAL_BLUR_FRAG = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+uniform sampler2D u_src;
+uniform vec2 u_res;
+uniform vec2 u_dir;
+uniform float u_spread;
+out vec4 o;
+void main() {
+  vec2 s = u_dir * u_spread / u_res;
+  vec3 acc = texture(u_src, v_uv).rgb * 0.227027;
+  acc += (texture(u_src, v_uv + s      ).rgb + texture(u_src, v_uv - s      ).rgb) * 0.1945946;
+  acc += (texture(u_src, v_uv + s * 2.0).rgb + texture(u_src, v_uv - s * 2.0).rgb) * 0.1216216;
+  acc += (texture(u_src, v_uv + s * 3.0).rgb + texture(u_src, v_uv - s * 3.0).rgb) * 0.054054;
+  acc += (texture(u_src, v_uv + s * 4.0).rgb + texture(u_src, v_uv - s * 4.0).rgb) * 0.016216;
+  o = vec4(acc, 1.0);
+}`;
+
+const HAL_COMP_FRAG = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+uniform sampler2D u_src;    /* blurred highlights */
+uniform sampler2D u_base;   /* pass input */
+uniform vec2 u_res;
+uniform float u_strength;
+uniform vec3 u_tint;
+out vec4 o;
+void main() {
+  vec4 base = texture(u_base, v_uv);
+  vec3 glow = clamp(texture(u_src, v_uv).rgb * u_tint * u_strength, 0.0, 1.0);
+  o = vec4(1.0 - (1.0 - base.rgb) * (1.0 - glow), base.a);   /* screen blend */
+}`;
+
 /* ---- Pass registry (ordered per §5: curve → defocus → CA → flash → halation
    → grain → leak; trim (pass 8) is a Canvas2D compositor, not a fragment pass).
    `paramKey` binds a pass to its slice of RECIPE.params and drives per-pass
-   bypass. ---- */
+   bypass. A pass is either { frag, uniforms } (one draw) or { steps: [...] }
+   (a sub-chain; a step with useBase:true additionally reads the pass input). ---- */
 const PASSES = [
   {
     id: "curve",
@@ -535,6 +596,29 @@ const PASSES = [
       gl.uniform1f(uloc("u_vignette"), p.vignette);
     },
   },
+  {
+    id: "halation",
+    name: "Halation",
+    paramKey: "halation",
+    steps: [
+      { frag: HAL_THRESH_FRAG, uniforms(gl, uloc) {
+          gl.uniform1f(uloc("u_threshold"), RECIPE.params.halation.threshold);
+        } },
+      { frag: HAL_BLUR_FRAG, uniforms(gl, uloc) {
+          gl.uniform2f(uloc("u_dir"), 1, 0);
+          gl.uniform1f(uloc("u_spread"), RECIPE.params.halation.radius);
+        } },
+      { frag: HAL_BLUR_FRAG, uniforms(gl, uloc) {
+          gl.uniform2f(uloc("u_dir"), 0, 1);
+          gl.uniform1f(uloc("u_spread"), RECIPE.params.halation.radius);
+        } },
+      { frag: HAL_COMP_FRAG, useBase: true, uniforms(gl, uloc) {
+          const p = RECIPE.params.halation;
+          gl.uniform1f(uloc("u_strength"), p.strength);
+          gl.uniform3f(uloc("u_tint"), p.tint[0], p.tint[1], p.tint[2]);
+        } },
+    ],
+  },
 ];
 
 /* ---- Engine: compiles passes, manages ping-pong FBOs, renders the chain ---- */
@@ -552,9 +636,13 @@ function makeEngine(gl) {
     };
     return { def, prog, uloc };
   }
-  const compiled = PASSES.map((p) => compileEntry(p, p.frag));
-  // Identity blit — used when every pass is bypassed, so the chain always writes
-  // the source to screen instead of a black frame.
+  // A multi-step pass compiles each step; the pass-level entry carries them.
+  const compiled = PASSES.map((p) =>
+    p.steps ? { def: p, steps: p.steps.map((s) => compileEntry(s, s.frag)) }
+            : compileEntry(p, p.frag));
+  // Identity blit — runs when every pass is bypassed (never a black frame), and
+  // as the forced chain entry when the first active pass is multi-step, so step
+  // shaders never deal with source orientation.
   const blit = compileEntry({ id: "__blit", uniforms: null }, IDENTITY_FRAG);
 
   // Source texture (the loaded/procedural image).
@@ -567,9 +655,11 @@ function makeEngine(gl) {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   }
 
-  // Two ping-pong render targets (RGBA8; float upgrade deferred to halation, A5).
+  // Pool of three scratch targets (RGBA8). Simple passes ping between two; a
+  // multi-step pass additionally needs its input (`base`) alive while the glow
+  // is blurred — three covers read + write + base at any moment.
   let W = 0, H = 0;
-  const targets = [makeTarget(), makeTarget()];
+  const targets = [makeTarget(), makeTarget(), makeTarget()];
   function makeTarget() {
     const tex = gl.createTexture();
     const fbo = gl.createFramebuffer();
@@ -617,39 +707,70 @@ function makeEngine(gl) {
       }
       sizeTargets(dim.w, dim.h);
     }
-    const active = activePasses();
+    let active = activePasses();
+    // A multi-step entry pass would have to orientation-correct both its main
+    // read and its base read; normalising through the blit keeps step shaders
+    // flip-free instead.
+    if (active[0].def.steps) active = [blit, ...active];
 
     gl.bindVertexArray(vao);
     gl.activeTexture(gl.TEXTURE0);
 
-    let readTex = srcTex;
-    let ping = 0;
-    for (let i = 0; i < active.length; i++) {
-      const c = active[i];
-      const first = i === 0, last = i === active.length - 1;
-      const ctx = { first, last, index: i, width: W, height: H };
-
-      if (last) {
+    // Pool allocation: pick a scratch target not currently being read.
+    const pick = (...used) => {
+      for (let k = 0; k < targets.length; k++) if (!used.includes(k)) return k;
+    };
+    const bindDst = (idx) => {
+      if (idx === -1) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         gl.viewport(0, 0, canvas.width, canvas.height);
       } else {
-        gl.bindFramebuffer(gl.FRAMEBUFFER, targets[ping].fbo);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, targets[idx].fbo);
         gl.viewport(0, 0, W, H);
       }
-
-      gl.useProgram(c.prog);
-      gl.bindTexture(gl.TEXTURE_2D, readTex);
-      gl.uniform1i(c.uloc("u_src"), 0);
-      gl.uniform2f(c.uloc("u_res"), W, H);
-      // Only the entry pass reads srcTex (top-left origin) and flips; downstream
-      // passes read FBOs already in display orientation. Null-safe on programs
-      // without the uniform.
-      gl.uniform1i(c.uloc("u_flipY"), first ? 1 : 0);
-      c.def.uniforms && c.def.uniforms(gl, c.uloc, ctx);
-
+    };
+    const drawOne = (entry, srcTexture, extra) => {
+      gl.useProgram(entry.prog);
+      gl.bindTexture(gl.TEXTURE_2D, srcTexture);
+      gl.uniform1i(entry.uloc("u_src"), 0);
+      gl.uniform2f(entry.uloc("u_res"), W, H);
+      extra && extra(entry);
+      entry.def.uniforms && entry.def.uniforms(gl, entry.uloc);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
+    };
 
-      if (!last) { readTex = targets[ping].tex; ping ^= 1; }
+    let readTex = srcTex, readIdx = -1;   // -1: srcTex / the screen
+    for (let i = 0; i < active.length; i++) {
+      const c = active[i];
+      const first = i === 0, last = i === active.length - 1;
+
+      if (c.def.steps) {
+        // Multi-step pass: keep the pass input (base) alive for useBase steps.
+        const baseTex = readTex, baseIdx = readIdx;
+        for (let j = 0; j < c.steps.length; j++) {
+          const st = c.steps[j];
+          const final = last && j === c.steps.length - 1;
+          const dstIdx = final ? -1 : pick(baseIdx, readIdx);
+          bindDst(dstIdx);
+          drawOne(st, readTex, (entry) => {
+            if (entry.def.useBase) {
+              gl.activeTexture(gl.TEXTURE1);
+              gl.bindTexture(gl.TEXTURE_2D, baseTex);
+              gl.uniform1i(entry.uloc("u_base"), 1);
+              gl.activeTexture(gl.TEXTURE0);
+            }
+          });
+          if (!final) { readTex = targets[dstIdx].tex; readIdx = dstIdx; }
+        }
+      } else {
+        const dstIdx = last ? -1 : pick(readIdx);
+        bindDst(dstIdx);
+        // Only the entry pass reads srcTex (top-left origin) and flips;
+        // downstream passes read FBOs already in display orientation.
+        // Null-location-safe on programs without the uniform.
+        drawOne(c, readTex, (entry) => gl.uniform1i(entry.uloc("u_flipY"), first ? 1 : 0));
+        if (!last) { readTex = targets[dstIdx].tex; readIdx = dstIdx; }
+      }
     }
     gl.bindVertexArray(null);
   }
