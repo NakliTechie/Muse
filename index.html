@@ -123,10 +123,11 @@
     border-color: var(--accent); color: var(--accent); background: #d8c08a14;
   }
   .look .thumb {
-    display: block; width: 72px; height: 54px; border-radius: 6px;
+    display: none; width: 76px; height: 57px; border-radius: 6px;
     object-fit: cover; margin-bottom: 5px; background: #000;
   }
-  .look.has-thumb { padding: 6px; border-radius: 9px; text-align: center; font-size: 11px; }
+  .look.has-thumb .thumb { display: block; }
+  .look.has-thumb { padding: 6px; border-radius: 9px; text-align: center; font-size: 11px; line-height: 1.2; }
   .preset-wrap { display: inline-flex; align-items: stretch; }
   .preset-wrap .look { border-top-right-radius: 0; border-bottom-right-radius: 0; }
   .look-del {
@@ -1530,8 +1531,8 @@ function boot() {
     $("save-preset").hidden = false;
     $("adjust").hidden = false;
   }
-  function setSource(img) { sourceImage = img; sourceDirty = true; revealEditor(); draw(); }
-  function loadSample() { sourceImage = null; sourceDirty = true; revealEditor(); draw(); }
+  function setSource(img) { sourceImage = img; sourceDirty = true; revealEditor(); draw(); refreshThumbs(); }
+  function loadSample() { sourceImage = null; sourceDirty = true; revealEditor(); draw(); refreshThumbs(); }
 
   const MAX_MP = 24;   // >24MP → downscale for preview (handoff §4)
   async function loadFile(file) {
@@ -1634,7 +1635,9 @@ function boot() {
     for (const lk of LOOKS) {
       const b = document.createElement("button");
       b.type = "button"; b.className = "look"; b.dataset.look = lk.id;
-      b.textContent = names[lk.id] || lk.name;
+      const img = document.createElement("img"); img.className = "thumb"; img.alt = "";
+      const nm = document.createElement("span"); nm.className = "name"; nm.textContent = names[lk.id] || lk.name;
+      b.append(img, nm);
       b.addEventListener("click", () => setLook(lk.id));
       strip.appendChild(b);
     }
@@ -1647,7 +1650,7 @@ function boot() {
       const del = document.createElement("button");
       del.type = "button"; del.className = "look-del"; del.textContent = "✕";
       del.setAttribute("aria-label", t("deletePreset", pr.name || t("unnamed")));
-      del.addEventListener("click", (e) => { e.stopPropagation(); presets.splice(i, 1); savePresets(); buildLookStrip(); syncLookStrip(); toast(t("presetDeleted")); });
+      del.addEventListener("click", (e) => { e.stopPropagation(); presets.splice(i, 1); savePresets(); buildLookStrip(); syncLookStrip(); refreshThumbs(); toast(t("presetDeleted")); });
       wrap.append(b, del); strip.appendChild(wrap);
     });
   }
@@ -1694,11 +1697,30 @@ function boot() {
     if (ok) {
       const name = (input.value || "").trim() || t("unnamed");
       presets.push({ name, recipe: getRecipe() });
-      savePresets(); buildLookStrip(); syncLookStrip();
+      savePresets(); buildLookStrip(); syncLookStrip(); refreshThumbs();
       toast(t("presetSaved", name));
     }
   }
   $("save-preset").addEventListener("click", doSavePreset);
+
+  /* ---- Look-deck thumbnails (B2): each base-look pill previews that look on the
+     loaded image. Rendered small off the current state, then restored. Refreshed
+     only on a source change (not on every look switch — the source is what varies). ---- */
+  function refreshThumbs() {
+    if (!hasContent) return;
+    const src = currentSource();
+    const tw = 152, th = Math.max(1, Math.round(tw * (src.height / src.width))) || 114;
+    const small = document.createElement("canvas"); small.width = tw; small.height = th;
+    small.getContext("2d").drawImage(src, 0, 0, tw, th);
+    const prev = RECIPE;
+    for (const b of strip.querySelectorAll(".look[data-look]")) {
+      RECIPE = makeRecipe(b.dataset.look);
+      engine.render(small); compositeTrim(canvas, view);
+      const img = b.querySelector("img.thumb");
+      if (img) { img.src = view.toDataURL("image/jpeg", 0.72); b.classList.add("has-thumb"); }
+    }
+    RECIPE = prev; sourceDirty = true; draw();
+  }
 
   /* ---- Slider panel (B3): fieldset per pass, per-pass bypass, tokenised ranges.
      panelSync[] holds one updater per control so a look/recipe change reflects
@@ -1883,7 +1905,7 @@ function boot() {
 
   // Topbar "Sample" cycles the fixed fixture set and switches back to sample mode.
   $("reload-sample").addEventListener("click", () => {
-    sourceImage = null; variant = (variant + 1) % 6; sourceDirty = true; revealEditor(); draw();
+    sourceImage = null; variant = (variant + 1) % 6; sourceDirty = true; revealEditor(); draw(); refreshThumbs();
   });
 
   // M0 harness / proto agent-face handle. The determinism verifier (A10) drives
