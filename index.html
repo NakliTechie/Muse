@@ -437,9 +437,13 @@ const LANG = {
     lookNames: {
       none: "Original",
       daguerreotype: "Daguerreotype",
+      tintype: "Tintype",
+      sepia: "Sepia",
+      cyanotype: "Cyanotype",
       autochrome: "Autochrome",
       kodachrome: "Kodachrome",
       polaroid: "Polaroid",
+      eighties: "'80s Flash",
       sorrenti: "Sorrenti",
       corinne: "Corinne Day",
       disposable: "Disposable",
@@ -587,6 +591,28 @@ const LOOKS = [
       defocus: { bypass: false, radius: 1.4, radial: 1.0, blend: 1 },
       flash: { bypass: false, strength: 0, radius: 0.6, softness: 0.4, vignette: 0.65 },
       trim: { bypass: false, aspect: "4:3", border: 0.02, stamp: false, matte: true } } },
+  { id: "tintype", name: "Tintype", era: "1860s", params: {
+      // warm-brown toned metal plate, hard contrast, edge fall-off, soft plate imperfection
+      curve: { slope: [1.08, 1.08, 1.08], offset: [-0.02, -0.02, -0.02], power: [1.12, 1.12, 1.12], sat: 0,
+               tone: { lo: [0.10, 0.07, 0.04], hi: [0.92, 0.85, 0.70], amt: 1.0 } },   // warm brown
+      defocus: { bypass: false, radius: 1.0, radial: 0.7, blend: 0.8 },
+      flash: { bypass: false, strength: 0, radius: 0.6, softness: 0.4, vignette: 0.5 },
+      grain: { bypass: false, amount: 0.03, size: 1.4 },
+      trim: { bypass: false, aspect: "4:3", border: 0.015, stamp: false, matte: false } } },
+  { id: "sepia", name: "Sepia", era: "1900s", params: {
+      // aged warm sepia print: faded, soft contrast, gentle bloom, album border
+      curve: { slope: [1.0, 1.0, 1.0], offset: [0.02, 0.02, 0.02], power: [1.0, 1.0, 1.0], sat: 0,
+               tone: { lo: [0.20, 0.12, 0.06], hi: [0.96, 0.90, 0.74], amt: 1.0 } },
+      halation: { bypass: false, threshold: 0.7, strength: 0.2, radius: 3, tint: [1, 0.9, 0.7] },
+      flash: { bypass: false, strength: 0, radius: 0.6, softness: 0.5, vignette: 0.4 },
+      grain: { bypass: false, amount: 0.04, size: 1.2 },
+      trim: { bypass: false, aspect: "4:3", border: 0.03, stamp: false, matte: false } } },
+  { id: "cyanotype", name: "Cyanotype", era: "1900s", params: {
+      // Prussian-blue contact print: smooth, mid-high contrast, faint edge fall-off
+      curve: { slope: [1.05, 1.05, 1.05], offset: [0, 0, 0], power: [1.05, 1.05, 1.05], sat: 0,
+               tone: { lo: [0.02, 0.08, 0.20], hi: [0.75, 0.90, 0.98], amt: 1.0 } },   // deep blue → pale cyan
+      flash: { bypass: false, strength: 0, radius: 0.6, softness: 0.5, vignette: 0.25 },
+      trim: { bypass: false, aspect: "4:3", border: 0.02, stamp: false, matte: false } } },
   { id: "autochrome", name: "Autochrome", era: "1910s", params: {
       // first colour: soft, painterly, muted pastels, warm, starch-grain
       curve: { slope: [1.05, 1.0, 0.9], offset: [0.05, 0.045, 0.04], power: [0.96, 0.96, 0.98], sat: 0.72 },
@@ -608,6 +634,15 @@ const LOOKS = [
       halation: { bypass: false, threshold: 0.6, strength: 0.5, radius: 4, tint: [1, 0.92, 0.78] },
       grain: { bypass: false, amount: 0.04, size: 1 },
       trim: { bypass: false, aspect: "1:1", border: 0.055, stamp: false, matte: false } } },
+
+  { id: "eighties", name: "'80s Flash", era: "1980s", params: {
+      // hard on-camera flash snapshot: saturated, warm, slightly blown, grainy, date-stamped
+      curve: { slope: [1.06, 1.0, 0.94], offset: [0, 0, 0], power: [1.02, 1.0, 1.03], sat: 1.18 },
+      aberration: { bypass: false, amount: 1.2 },
+      flash: { bypass: false, strength: 0.5, radius: 0.55, softness: 0.28, vignette: 0.4 },
+      halation: { bypass: false, threshold: 0.75, strength: 0.3, radius: 2.5, tint: [1, 0.7, 0.6] },
+      grain: { bypass: false, amount: 0.08, size: 1.3 },
+      trim: { bypass: false, aspect: "4:3", border: 0, stamp: true, matte: false } } },
 
   // ---- The 90s deck (the original four) ----
   { id: "sorrenti", name: "Sorrenti", era: "1990s", params: {
