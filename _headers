@@ -1,10 +1,11 @@
 # Cloudflare Pages HTTP headers — the source of truth for CSP once deployed.
 # Mirrors the <meta> CSP in index.html and adds frame-ancestors, which browsers
 # ignore in a <meta> element (header-only directive). Keep the two in sync.
-# connect-src stays 'none' (no image bytes ever leave the device).
+# connect-src allows ONLY the GA collect endpoint (pageview-only telemetry: no image
+# bytes, no PII, no persisted client id). Image data never touches the network.
 # frame-ancestors 'self' blocks external clickjacking but lets Muse's own pages
 # (m0-determinism / m1-selftest) frame index.html for same-origin verification.
 /*
-  Content-Security-Policy: default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'self'
+  Content-Security-Policy: default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src https://www.google-analytics.com; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'self'
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
