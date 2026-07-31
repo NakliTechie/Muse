@@ -179,6 +179,40 @@ async function run() {
     addRow("CC0 sample gallery present", gal.length >= 1 && withImg === gal.length,
       `${gal.length} embedded CC0 sample thumbnails`);
   }
+  { // 10) Basics tier (M2): 5 macros + a folded Advanced panel; a macro maps onto its pass
+    ed.loadSample();
+    const doc = w.document;
+    const basics = doc.querySelector(".basics");
+    const macros = basics ? [...basics.querySelectorAll(".ctl input[type=range]")] : [];
+    const adv = doc.querySelector("details.advanced");
+    const advPasses = adv ? adv.querySelectorAll("fieldset.pass").length : 0;
+    let mapped = false;
+    if (macros[2]) {                                   // the Grain macro
+      macros[2].value = 0.2;
+      macros[2].dispatchEvent(new w.Event("input", { bubbles: true }));
+      const p = muse.getRecipe().params.grain;
+      mapped = Math.abs(p.amount - 0.2) < 1e-6 && p.bypass === false;
+    }
+    addRow("Basics tier: 5 macros + Advanced fold, macro drives its pass",
+      !!basics && macros.length === 5 && !!adv && !adv.open && advPasses === 8 && mapped,
+      `${macros.length} macros · advanced-folded:${adv && !adv.open} · ${advPasses} passes · grain-map:${mapped}`);
+  }
+  { // 11) ⋯ overflow menu folds the secondary actions; the bar stays Adjust + Export
+    const doc = w.document;
+    const barIds = [...doc.querySelectorAll(".actionbar button")].map((b) => b.id);
+    const appbarHelp = !!doc.querySelector("header #help");
+    const menuBtn = doc.getElementById("menu-btn"), menu = doc.getElementById("overflow-menu");
+    ed.loadSample();                                   // so Save-preset unhides in the menu
+    menuBtn.click();
+    await new Promise((r) => setTimeout(r, 40));
+    const items = menu ? [...menu.querySelectorAll(".menu-item:not([hidden])")].map((b) => b.id) : [];
+    const opened = !!menu && !menu.hidden;
+    menuBtn.click();                                   // close again
+    const ok = barIds.join(",") === "menu-btn,adjust,export" && !appbarHelp && opened &&
+      ["open-image", "save-preset", "import-recipe", "help"].every((id) => items.includes(id));
+    addRow("⋯ menu folds Open/Save/Import/Help; bar = Adjust+Export", ok,
+      `bar:[${barIds.join(",")}] · menu:[${items.join(",")}] · appbarHelp:${appbarHelp}`);
+  }
 
   const allPass = rows.every((r) => r.ok);
   $("banner").dataset.state = allPass ? "pass" : "fail";

@@ -87,12 +87,33 @@
     overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none;
   }
   .actionbar .btn { min-height: 44px; flex: 0 0 auto; }
+  .actionbar .icon-btn { width: 44px; height: 44px; font-size: 20px; flex: 0 0 auto; }
+  .actionbar #menu-btn[aria-expanded="true"] { background: #ffffff1a; border-color: #ffffff33; }
   /* Export is the primary output — pin it to the right so it is ALWAYS visible,
      even when the bar overflows and scrolls on a narrow phone (UX-H1). */
   .actionbar #export {
     border-color: var(--accent); position: sticky; right: 0; margin-left: auto;
     background: #1c1813; box-shadow: -16px 0 14px -10px var(--bg);
   }
+  /* ⋯ overflow popover — fixed, opens UPWARD from the bar's left edge. Kept OUT of
+     .actionbar (which clips overflow) so it can extend above the bar. */
+  .overflow-menu {
+    position: fixed; left: 10px; z-index: 60;
+    bottom: calc(62px + env(safe-area-inset-bottom));
+    min-width: 200px; padding: 6px;
+    background: #17140f; border: 1px solid #ffffff1f; border-radius: 12px;
+    box-shadow: 0 10px 30px -8px #000000cc, 0 0 0 1px #0006;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .overflow-menu[hidden] { display: none; }
+  .menu-item {
+    appearance: none; text-align: left; cursor: pointer;
+    background: transparent; border: 0; color: var(--ink);
+    font: inherit; font-size: 15px; border-radius: 8px;
+    padding: 11px 12px; min-height: 44px; width: 100%;
+  }
+  .menu-item:hover, .menu-item:focus-visible { background: #ffffff14; outline: none; }
+  .menu-item[hidden] { display: none; }
 
   /* Full-viewport WebGL2-unavailable error state — no partial UI behind it. */
   .fatal {
@@ -321,6 +342,21 @@
   }
   input[type=range]::-moz-range-thumb { width: 22px; height: 22px; border-radius: 50%; background: var(--accent); border: 3px solid #16161a; }
   input[type=range]:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* Basics tier — five macros at the top of the drawer, above the Advanced fold. */
+  .basics { margin-bottom: 6px; }
+  .basics-title { margin: 4px 0 2px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  /* Warmth / Contrast are bipolar — a centre notch marks the look's own value (0). */
+  input[type=range].center { background: linear-gradient(#ffffff33, #ffffff33) no-repeat center / 2px 12px; }
+  /* Advanced — the full per-pass panel, folded away by default. */
+  details.advanced { margin-top: 12px; border-top: 1px solid #ffffff14; padding-top: 8px; }
+  details.advanced > summary {
+    cursor: pointer; list-style: none; user-select: none;
+    font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600;
+    padding: 8px 2px; min-height: 24px; display: flex; align-items: center; gap: 8px;
+  }
+  details.advanced > summary::-webkit-details-marker { display: none; }
+  details.advanced > summary::before { content: "▸"; font-size: 10px; transition: transform .12s; }
+  details.advanced[open] > summary::before { transform: rotate(90deg); }
   input.toggle { width: 16px; height: 16px; accent-color: var(--accent); }
   /* Desktop enhancement: the bottom sheet becomes a right-side drawer. */
   @media (min-width: 760px) {
@@ -343,7 +379,6 @@
     <span class="status" id="engine-status"></span>
     <span class="spacer"></span>
     <span class="ver" id="ver"></span>
-    <button class="btn" id="help" type="button"></button>
   </header>
 
   <main class="stage">
@@ -367,12 +402,23 @@
   <!-- Look strip: bottom-pinned filter row (Instagram-shaped), thumb-reachable. -->
   <nav class="lookstrip" id="lookstrip" aria-label="looks"></nav>
 
-  <!-- Primary action bar: bottom reach zone, ≥44px touch targets. -->
+  <!-- Primary action bar: bottom reach zone, ≥44px touch targets.
+       Only the two per-image actions stay prominent — Adjust + Export. Everything
+       else (Open / Save preset / Import recipe / Help) folds into the ⋯ menu. -->
   <div class="actionbar">
-    <button class="btn" id="open-image" type="button"></button>
+    <button class="icon-btn" id="menu-btn" type="button" aria-haspopup="menu"
+            aria-expanded="false" aria-controls="overflow-menu">⋯</button>
     <button class="btn" id="adjust" type="button" hidden aria-expanded="false" aria-controls="drawer"></button>
-    <button class="btn" id="save-preset" type="button" hidden></button>
     <button class="btn primary" id="export" type="button" hidden></button>
+  </div>
+
+  <!-- ⋯ overflow menu: in-app popover (never a native menu), opens upward from the
+       bar. Holds the secondary actions so the bar stays a two-button reach zone. -->
+  <div class="overflow-menu" id="overflow-menu" role="menu" aria-labelledby="menu-btn" hidden>
+    <button class="menu-item" id="open-image" role="menuitem" type="button"></button>
+    <button class="menu-item" id="save-preset" role="menuitem" type="button" hidden></button>
+    <button class="menu-item" id="import-recipe" role="menuitem" type="button"></button>
+    <button class="menu-item" id="help" role="menuitem" type="button"></button>
   </div>
 
   <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp" class="visually-hidden" aria-hidden="true" tabindex="-1">
@@ -443,6 +489,12 @@ const LANG = {
     // Help + intro
     help: "Help",
     helpBtn: "?",
+    // Overflow (⋯) menu — secondary actions folded off the bottom bar
+    more: "More",
+    miOpen: "Open image…",
+    miSave: "Save preset…",
+    miImport: "Import recipe…",
+    miHelp: "Help & shortcuts",
     helpTitle: "Keyboard & privacy",
     privacyLine: "Your photos never leave your device — there is no upload. You can verify it: open your browser's Network tab and watch it stay silent while you edit and export.",
     shortcuts: [
@@ -482,11 +534,19 @@ const LANG = {
     },
     ctl: {
       slope: "Slope", offset: "Offset (lift)", power: "Power (gamma)", sat: "Saturation",
+      temp: "Warmth", contrast: "Contrast",
       radius: "Radius", edge: "Edge bias", blend: "Blend", amount: "Amount",
       strength: "Strength", softness: "Softness", vignette: "Vignette",
       threshold: "Threshold", spread: "Spread", tint: "Tint", size: "Size",
       hue: "Hue", angle: "Angle", falloff: "Falloff",
       aspect: "Aspect", border: "Border", stamp: "Date stamp", matte: "Oval matte", none: "None",
+    },
+    // Basics tier — five plain-language macros over the deep passes (M2).
+    basicsTitle: "Basics",
+    advancedTitle: "Advanced — every pass",
+    basics: {
+      warmth: "Warmth", contrast: "Contrast", grain: "Grain",
+      vignette: "Vignette", flash: "Flash",
     },
     lookLabel: "Look",
     // Proper nouns still route through the map so the i18n scaffold stays honest (§13).
@@ -626,6 +686,7 @@ const DEFAULT_SEED = 1;
 function defaultParams() {
   return {
     curve:      { bypass: false, slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], sat: 1,
+                  temp: 0, contrast: 0,   // Basics macros: warmth + contrast, 0 = identity (looks unchanged)
                   tone: { lo: [0.16, 0.10, 0.06], hi: [0.98, 0.95, 0.86], amt: 0 } },
     defocus:    { bypass: true,  radius: 0, radial: 0, blend: 1 },
     aberration: { bypass: true,  amount: 0 },
@@ -848,6 +909,8 @@ uniform vec3 u_slope;
 uniform vec3 u_offset;
 uniform vec3 u_power;
 uniform float u_sat;
+uniform float u_temp;     // Basics: warmth, 0 = identity (guarded); + warms, − cools
+uniform float u_contrast; // Basics: contrast about 0.5, 0 = identity (guarded)
 uniform vec3 u_toneLo;   // duotone shadow tint
 uniform vec3 u_toneHi;   // duotone highlight tint
 uniform float u_toneAmt; // 0 = off (identity); >0 blends the luma→lo..hi ramp
@@ -862,6 +925,9 @@ void main() {
   // Saturation about Rec.709 luma.
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
   c = clamp(mix(vec3(l), c, u_sat), 0.0, 1.0);
+  // Basics macros — both guarded on exact 0.0 so every stock look is byte-identical.
+  if (u_temp != 0.0)     { c = clamp(c + vec3(u_temp, 0.0, -u_temp) * 0.12, 0.0, 1.0); }        // warmth: R up / B down
+  if (u_contrast != 0.0) { c = clamp((c - 0.5) * (1.0 + u_contrast * 0.6) + 0.5, 0.0, 1.0); }   // contrast about mid-grey
   // Duotone toning — split-tone / sepia / silver for the pre-colour eras. Maps the
   // (possibly desaturated) luminance onto a shadow→highlight tint ramp, blended by
   // amount. amt 0 leaves colour untouched, so every existing look is unchanged.
@@ -1104,6 +1170,8 @@ const PASSES = [
       gl.uniform3f(uloc("u_offset"), p.offset[0], p.offset[1], p.offset[2]);
       gl.uniform3f(uloc("u_power"), p.power[0], p.power[1], p.power[2]);
       gl.uniform1f(uloc("u_sat"), p.sat);
+      gl.uniform1f(uloc("u_temp"), p.temp || 0);
+      gl.uniform1f(uloc("u_contrast"), p.contrast || 0);
       const tn = p.tone || { lo: [0, 0, 0], hi: [1, 1, 1], amt: 0 };
       gl.uniform3f(uloc("u_toneLo"), tn.lo[0], tn.lo[1], tn.lo[2]);
       gl.uniform3f(uloc("u_toneHi"), tn.hi[0], tn.hi[1], tn.hi[2]);
@@ -1636,6 +1704,8 @@ const PANEL = [
     { prop: "offset", rgb: true, key: "offset", min: -0.2, max: 0.2, step: 0.005 },
     { prop: "power",  rgb: true, key: "power",  min: 0.5, max: 1.5, step: 0.01 },
     { prop: "sat",    key: "sat", min: 0, max: 2, step: 0.01 },
+    { prop: "temp",   key: "temp",     min: -1, max: 1, step: 0.01 },
+    { prop: "contrast", key: "contrast", min: -1, max: 1, step: 0.01 },
   ] },
   { pass: "defocus", controls: [
     { prop: "radius", key: "radius", min: 0, max: 5, step: 0.05 },
@@ -1673,6 +1743,18 @@ const PANEL = [
     { prop: "stamp",  key: "stamp",  kind: "toggle" },
     { prop: "matte",  key: "matte",  kind: "toggle" },
   ] },
+];
+
+/* Basics tier (M2): five plain-language macros, each a thin wrapper over one deep
+   pass param. warmth/contrast are additive scalars on the curve (0 = as the look
+   intends); grain/vignette/flash are the pass values directly and un-bypass their
+   pass when touched. Every one two-way-syncs with the Advanced panel below. */
+const BASICS = [
+  { key: "warmth",   pass: "curve", prop: "temp",     min: -1,  max: 1,   step: 0.01,  center: true },
+  { key: "contrast", pass: "curve", prop: "contrast", min: -1,  max: 1,   step: 0.01,  center: true },
+  { key: "grain",    pass: "grain", prop: "amount",   min: 0,   max: 0.3, step: 0.005, unbypass: true },
+  { key: "vignette", pass: "flash", prop: "vignette", min: 0,   max: 1,   step: 0.01,  unbypass: true },
+  { key: "flash",    pass: "flash", prop: "strength", min: 0,   max: 1,   step: 0.01,  unbypass: true },
 ];
 
 /* Focus-trap Tab within a container (drawer/modal share this shape). */
@@ -2032,6 +2114,36 @@ function boot() {
 
   function buildPanel() {
     drawerBody.textContent = ""; panelSync.length = 0;
+
+    // --- Basics tier: five plain-language macros over the deep passes (M2). ---
+    const basics = document.createElement("section"); basics.className = "basics";
+    const bT = document.createElement("h3"); bT.className = "basics-title"; bT.textContent = t("basicsTitle");
+    basics.appendChild(bT);
+    const basicNames = t("basics");
+    for (const b of BASICS) {
+      const wrap = document.createElement("div"); wrap.className = "ctl";
+      const lab = document.createElement("div"); lab.className = "lab";
+      const t1 = document.createElement("span"); t1.textContent = basicNames[b.key] || b.key;
+      const val = document.createElement("span"); val.className = "val";
+      lab.append(t1, val); wrap.appendChild(lab);
+      const r = document.createElement("input"); r.type = "range"; r.min = b.min; r.max = b.max; r.step = b.step;
+      r.setAttribute("aria-label", basicNames[b.key] || b.key);
+      if (b.center) r.classList.add("center");
+      r.addEventListener("input", () => {
+        RECIPE.params[b.pass][b.prop] = parseFloat(r.value);
+        if (b.unbypass) RECIPE.params[b.pass].bypass = false;
+        syncPanel();                 // mirror into the Advanced sliders + bypass toggles
+        if (hasContent) draw();
+      });
+      wrap.appendChild(r);
+      panelSync.push(() => { const v = RECIPE.params[b.pass][b.prop]; r.value = v; val.textContent = fmtVal(v, b.step); });
+      basics.appendChild(wrap);
+    }
+    drawerBody.appendChild(basics);
+
+    // --- Advanced: the full per-pass panel, collapsed by default (progressive disclosure). ---
+    const adv = document.createElement("details"); adv.className = "advanced";
+    const sum = document.createElement("summary"); sum.textContent = t("advancedTitle"); adv.appendChild(sum);
     for (const grp of PANEL) {
       const fs = document.createElement("fieldset");
       fs.className = "pass"; fs.dataset.pass = grp.pass;
@@ -2093,8 +2205,9 @@ function boot() {
         }
         fs.appendChild(wrap);
       }
-      drawerBody.appendChild(fs);
+      adv.appendChild(fs);
     }
+    drawerBody.appendChild(adv);
   }
   function syncPanel() { for (const f of panelSync) f(); seedInput.value = RECIPE.seed; }
 
@@ -2145,9 +2258,12 @@ function boot() {
   function getRecipe() { return JSON.parse(serialiseRecipe(RECIPE)); }
 
   // Static strings (all through the lang map — §13)
-  $("open-image").textContent = t("openImage");
+  $("open-image").textContent = t("miOpen");
   $("export").textContent = t("exportBtn");
-  $("save-preset").textContent = t("savePreset");
+  $("save-preset").textContent = t("miSave");
+  $("import-recipe").textContent = t("miImport");
+  $("menu-btn").setAttribute("aria-label", t("more"));
+  $("menu-btn").setAttribute("title", t("more"));
   // On touch devices there's no "drop" — use "Open" as the verb (G-M5).
   $("hero-title").textContent = matchMedia("(pointer: coarse)").matches ? t("heroTitleTouch") : t("heroTitle");
   $("hero-sub").textContent = t("heroSub");
@@ -2162,15 +2278,13 @@ function boot() {
   $("seed-label").textContent = t("seedLabel");
   $("seed-label").setAttribute("title", t("seedTitle"));
   $("seed-input").setAttribute("title", t("seedTitle"));
-  $("help").textContent = t("helpBtn");
+  $("help").textContent = t("miHelp");
   // a11y attribute strings through the map (locale-overridable — §13)
   $("view").setAttribute("aria-label", t("a11yPreview"));
   $("lookstrip").setAttribute("aria-label", t("a11yLooks"));
   $("drawer").setAttribute("aria-label", t("adjust"));
   $("drawer-close").setAttribute("aria-label", t("close"));
   $("seed-shuffle").setAttribute("title", t("shuffleSeed"));
-  $("help").setAttribute("aria-label", t("help"));
-  $("help").setAttribute("title", t("help"));
 
   buildLookStrip();
   buildPanel();
@@ -2222,6 +2336,35 @@ function boot() {
     await openModal({ title: t("helpTitle"), node, actions: [{ label: t("close"), value: true, primary: true }], wide: true });
   }
   $("help").addEventListener("click", showHelp);
+
+  /* ---- ⋯ overflow menu: in-app popover holding the secondary actions.
+     Open image / Save preset / Import recipe / Help each keep their own handlers
+     (bound above); this only toggles the popover and dismisses it after a pick. ---- */
+  const menuBtn = $("menu-btn");
+  const overflowMenu = $("overflow-menu");
+  function setMenu(open) {
+    overflowMenu.hidden = !open;
+    menuBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) {
+      const first = overflowMenu.querySelector(".menu-item:not([hidden])");
+      if (first) setTimeout(() => first.focus(), 0);
+    }
+  }
+  const closeMenu = (refocus) => { if (!overflowMenu.hidden) { setMenu(false); if (refocus) menuBtn.focus(); } };
+  menuBtn.addEventListener("click", (e) => { e.stopPropagation(); setMenu(overflowMenu.hidden); });
+  // Activating any item runs its own handler (elsewhere) then dismisses the menu.
+  overflowMenu.addEventListener("click", (e) => { if (e.target.closest(".menu-item")) closeMenu(false); });
+  $("import-recipe").addEventListener("click", () => presetFileInput.click());
+  // Dismiss on outside tap …
+  document.addEventListener("pointerdown", (e) => {
+    if (overflowMenu.hidden) return;
+    if (e.target.closest("#overflow-menu") || e.target.closest("#menu-btn")) return;
+    closeMenu(false);
+  });
+  // … and on Esc (capture-phase + stop, so the panel/dialog shortcut below doesn't also fire).
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !overflowMenu.hidden) { e.stopPropagation(); closeMenu(true); }
+  }, true);
 
   async function maybeShowIntro() {
     if (store.get(STORE_KEYS.intro)) return;
