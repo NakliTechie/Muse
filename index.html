@@ -167,6 +167,32 @@
     position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
     overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
   }
+
+  /* In-app modal (confirm / help / intro) — replaces native alert/confirm/prompt. */
+  .modal-scrim {
+    position: fixed; inset: 0; z-index: 70;
+    display: grid; place-items: center;
+    background: #000a; padding: 20px;
+    animation: toast-in .15s ease-out;
+  }
+  .modal {
+    background: var(--surface); color: var(--ink);
+    border: 1px solid #ffffff1f; border-radius: var(--radius);
+    padding: 22px; max-width: 460px; width: 100%;
+    box-shadow: 0 16px 48px #000b; max-height: 86vh; overflow: auto;
+  }
+  .modal.wide { max-width: 560px; }
+  .modal h2 { margin: 0 0 10px; font-size: 17px; }
+  .modal p { margin: 0 0 12px; color: var(--muted); }
+  .modal .actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
+  .modal dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; }
+  .modal dt { color: var(--ink); }
+  .modal dt kbd {
+    font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: #ffffff12; border: 1px solid #ffffff22; border-bottom-width: 2px;
+    border-radius: 5px; padding: 1px 6px;
+  }
+  .modal dd { color: var(--muted); margin: 0; align-self: center; }
 </style>
 </head>
 <body>
@@ -239,6 +265,15 @@ const LANG = {
     toastUnreadable: "That file isn't a supported image. Accepted: PNG, JPEG, WebP.",
     toastDownscaled: (mp) => `Large image (${mp}MP) — preview downscaled for speed; export uses full detail where memory allows.`,
     toastDecodeFail: "Couldn't read that image — it may be corrupt.",
+    // Recipe / export
+    recipeFoundTitle: "Restore this edit?",
+    recipeFoundBody: "This image carries a Muse recipe — the exact look, sliders, and seed it was exported with. Restore them?",
+    restore: "Restore edit",
+    keepAsIs: "Keep as-is",
+    exportDone: "Saved — recipe embedded in the PNG.",
+    exportCancelled: "Export cancelled.",
+    exportFail: "Export failed — see console.",
+    close: "Close",
     lookLabel: "Look",
     // Proper nouns still route through the map so the i18n scaffold stays honest (§13).
     lookNames: {
@@ -1089,6 +1124,151 @@ function makeSampleImage(w, h, variant) {
   return c;
 }
 
+/* =========================================================================
+ * In-app modal — replaces native alert/confirm/prompt (handoff §12). Focus-
+ * trapped, Esc/scrim-dismiss, restores focus to the opener. Returns a promise
+ * that resolves with the chosen action's value (or null on dismiss).
+ * ========================================================================= */
+function openModal({ title, body, node, actions, wide, dismissValue = null }) {
+  return new Promise((resolve) => {
+    const opener = document.activeElement;
+    const scrim = document.createElement("div");
+    scrim.className = "modal-scrim";
+    const modal = document.createElement("div");
+    modal.className = "modal" + (wide ? " wide" : "");
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    if (title) {
+      const h = document.createElement("h2");
+      h.id = "modal-title-" + Math.floor(performance.now());
+      h.textContent = title;
+      modal.setAttribute("aria-labelledby", h.id);
+      modal.appendChild(h);
+    }
+    if (node) modal.appendChild(node);
+    else if (body) { const p = document.createElement("p"); p.textContent = body; modal.appendChild(p); }
+
+    const bar = document.createElement("div");
+    bar.className = "actions";
+    let done = false;
+    const finish = (val) => { if (done) return; done = true; document.removeEventListener("keydown", onKey, true); scrim.remove(); if (opener && opener.focus) opener.focus(); resolve(val); };
+    for (const a of (actions || [{ label: "OK", value: true, primary: true }])) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "btn" + (a.primary ? " primary" : "");
+      b.textContent = a.label;
+      b.addEventListener("click", () => finish(a.value));
+      bar.appendChild(b);
+    }
+    modal.appendChild(bar);
+    scrim.appendChild(modal);
+    scrim.addEventListener("mousedown", (e) => { if (e.target === scrim) finish(dismissValue); });
+
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); finish(dismissValue); return; }
+      if (e.key === "Tab") {
+        const f = modal.querySelectorAll('button, [href], input, [tabindex]:not([tabindex="-1"])');
+        if (!f.length) return;
+        const first = f[0], last = f[f.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    document.body.appendChild(scrim);
+    const focusFirst = bar.querySelector(".primary") || bar.querySelector("button");
+    focusFirst && focusFirst.focus();
+  });
+}
+
+/* =========================================================================
+ * Recipe embed = the artifact (§6). PNG tEXt chunk, keyword "muse", no EXIF
+ * library (§12). CRC-32 is the standard PNG polynomial. The chunk is inserted
+ * immediately before IEND; reading walks the chunk list for keyword "muse".
+ * ========================================================================= */
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(bytes) {
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+const RECIPE_KEYWORD = "muse";
+// tEXt is Latin-1; our recipe JSON is ASCII (numeric params, ASCII keys), so a
+// byte-per-char encoding round-trips exactly.
+function latin1Bytes(str) { const u = new Uint8Array(str.length); for (let i = 0; i < str.length; i++) u[i] = str.charCodeAt(i) & 0xff; return u; }
+function latin1Str(bytes) { let s = ""; for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]); return s; }
+
+function embedRecipePNG(png, recipeStr) {
+  const type = latin1Bytes("tEXt");
+  const data = latin1Bytes(RECIPE_KEYWORD + "\0" + recipeStr);
+  const chunk = new Uint8Array(12 + data.length);
+  const dv = new DataView(chunk.buffer);
+  dv.setUint32(0, data.length);
+  chunk.set(type, 4);
+  chunk.set(data, 8);
+  const crcIn = new Uint8Array(4 + data.length); crcIn.set(type, 0); crcIn.set(data, 4);
+  dv.setUint32(8 + data.length, crc32(crcIn));
+  // IEND is the final 12 bytes of a valid PNG; splice the tEXt chunk before it.
+  const iendPos = png.length - 12;
+  const out = new Uint8Array(png.length + chunk.length);
+  out.set(png.subarray(0, iendPos), 0);
+  out.set(chunk, iendPos);
+  out.set(png.subarray(iendPos), iendPos + chunk.length);
+  return out;
+}
+function readRecipePNG(png) {
+  if (png.length < 8 || png[0] !== 0x89 || png[1] !== 0x50 || png[2] !== 0x4e || png[3] !== 0x47) return null;
+  const dv = new DataView(png.buffer, png.byteOffset, png.byteLength);
+  let p = 8;
+  while (p + 8 <= png.length) {
+    const len = dv.getUint32(p);
+    const type = latin1Str(png.subarray(p + 4, p + 8));
+    const dataStart = p + 8;
+    if (type === "tEXt") {
+      const data = png.subarray(dataStart, dataStart + len);
+      const z = data.indexOf(0);
+      if (z >= 0 && latin1Str(data.subarray(0, z)) === RECIPE_KEYWORD) {
+        return latin1Str(data.subarray(z + 1));
+      }
+    }
+    if (type === "IEND") break;
+    p = dataStart + len + 4;   // data + 4-byte CRC
+  }
+  return null;
+}
+
+// Save a blob via the File System Access API, falling back to <a download>.
+async function saveBlob(blob, name) {
+  if (window.showSaveFilePicker) {
+    try {
+      const h = await window.showSaveFilePicker({
+        suggestedName: name,
+        types: [{ description: "PNG image", accept: { "image/png": [".png"] } }],
+      });
+      const w = await h.createWritable();
+      await w.write(blob); await w.close();
+      return "saved";
+    } catch (e) {
+      if (e && e.name === "AbortError") return "cancelled";
+      // fall through to download on any FSA failure
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return "downloaded";
+}
+
 /* ---- Boot ---- */
 function boot() {
   // static strings
@@ -1153,6 +1333,11 @@ function boot() {
   async function loadFile(file) {
     if (!file) return;
     if (!/^image\/(png|jpeg|webp)$/i.test(file.type)) { toast(t("toastUnreadable"), "err"); return; }
+    // Sniff an embedded Muse recipe (PNG tEXt) before we throw the bytes away.
+    let recipeStr = null;
+    if (/png/i.test(file.type)) {
+      try { recipeStr = readRecipePNG(new Uint8Array(await file.arrayBuffer())); } catch (_) {}
+    }
     let bmp;
     try {
       bmp = await createImageBitmap(file, { imageOrientation: "from-image" });  // respect EXIF rotation
@@ -1170,7 +1355,39 @@ function boot() {
       toast(t("toastDownscaled", mp.toFixed(0)));
     }
     setSource(img);
+    if (recipeStr) promptRestore(recipeStr);   // in-app confirm, never native (§4)
   }
+
+  // Recipe carried in a dropped image → offer to restore the exact edit (§4).
+  async function promptRestore(recipeStr) {
+    const yes = await openModal({
+      title: t("recipeFoundTitle"),
+      body: t("recipeFoundBody"),
+      actions: [
+        { label: t("restore"), value: true, primary: true },
+        { label: t("keepAsIs"), value: false },
+      ],
+      dismissValue: false,
+    });
+    if (yes) { try { setRecipe(JSON.parse(recipeStr)); } catch (e) { console.error("[muse] recipe restore failed:", e); } }
+  }
+
+  // Export the composited frame with its recipe embedded (§6). FSA primary,
+  // <a download> fallback. via omitted here (a UI export, not an agent one).
+  async function exportImage() {
+    if (!hasContent) return;
+    try {
+      const blob = await new Promise((res) => view.toBlob(res, "image/png"));
+      if (!blob) throw new Error("toBlob returned null");
+      const withRecipe = embedRecipePNG(new Uint8Array(await blob.arrayBuffer()), serialiseRecipe(RECIPE));
+      const result = await saveBlob(new Blob([withRecipe], { type: "image/png" }), `muse-${RECIPE.look}.png`);
+      if (result === "cancelled") toast(t("exportCancelled"));
+      else toast(t("exportDone"));
+    } catch (e) {
+      console.error("[muse] export failed:", e); toast(t("exportFail"), "err");
+    }
+  }
+  $("export").addEventListener("click", exportImage);
 
   // File picker + drag/drop. Window-level dragover/drop preventDefault stops the
   // browser from navigating away when a photo lands outside the stage.
