@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'">
+<meta name="version" content="0.1.0-m2">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230b0b0d'/%3E%3Ccircle cx='8' cy='8' r='4.5' fill='none' stroke='%23d8c08a' stroke-width='1.6'/%3E%3Ccircle cx='8' cy='8' r='1.6' fill='%23d8c08a'/%3E%3C/svg%3E">
+<title>Muse — M2 camera self-test</title>
+<style>
+  :root { --bg:#0b0b0d; --surface:#16161a; --ink:#ececf0; --accent:#d8c08a; --muted:#8a8a93; --danger:#e06a5a; --ok:#5ec08a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 16px; max-width: 760px; }
+  .banner { display: inline-block; font-weight: 600; padding: 10px 16px; border-radius: 9px; border: 1px solid; margin-bottom: 16px; }
+  .banner[data-state="run"]  { color: var(--muted);  border-color: #ffffff20; }
+  .banner[data-state="pass"] { color: var(--ok);     border-color: #5ec08a55; }
+  .banner[data-state="fail"] { color: var(--danger); border-color: #e06a5a66; }
+  table { border-collapse: collapse; width: 100%; max-width: 900px; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #ffffff12; vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  td.r { font-weight: 600; }
+  td.r[data-ok="1"] { color: var(--ok); } td.r[data-ok="0"] { color: var(--danger); }
+  .note { color: var(--muted); font-size: 12px; }
+  code { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); }
+  iframe { position: absolute; width: 1024px; height: 768px; left: -3000px; top: 0; border: 0; }
+</style>
+</head>
+<body>
+  <h1>Muse — M2 camera self-test</h1>
+  <p class="sub">Drives the M2 camera through <code>boot.editor.cameraAPI</code> in a fresh
+  frame, with <code>getUserMedia</code> monkeypatched to a canvas <code>captureStream()</code>
+  fake camera — so the whole selfie path is verifiable headless: live preview renders through
+  the WebGL2 chain, a look applies live, the shutter lands the frame in the editor with the
+  recipe intact, deny degrades to upload, and no camera track is ever left running. Machine
+  gate — never self-report. Result mirrored to the console and <code>window.__m2_gate</code>.
+  <b>Real-device preview perf + real-camera UX are a separate on-device check (blind spot).</b></p>
+  <div class="banner" id="banner" data-state="run">Running…</div>
+  <table>
+    <thead><tr><th>Check</th><th>Result</th><th>Evidence</th></tr></thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <iframe id="app" src="index.html" title="app under test"></iframe>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const rows = [];
+function addRow(name, ok, evidence) {
+  rows.push({ name, ok, evidence });
+  const tr = document.createElement("tr");
+  const td1 = document.createElement("td"); td1.textContent = name;
+  const td2 = document.createElement("td"); td2.className = "r"; td2.dataset.ok = ok ? "1" : "0"; td2.textContent = ok ? "PASS" : "FAIL";
+  const td3 = document.createElement("td"); td3.className = "note"; td3.textContent = evidence;
+  tr.append(td1, td2, td3);
+  $("tbody").appendChild(tr);
+}
+function waitForHarness(w) {
+  return new Promise((res, rej) => {
+    let n = 0;
+    const iv = setInterval(() => {
+      if (w && w.boot && w.boot.editor && w.boot.editor.cameraAPI) { clearInterval(iv); res(w); }
+      else if (++n > 100) { clearInterval(iv); rej(new Error("harness never came up")); }
+    }, 50);
+  });
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// A fake camera: an animated canvas in the iframe document, exposed as a MediaStream.
+// Keeping it drawn every frame is what gives the <video> a non-zero videoWidth.
+function installFakeCamera(w) {
+  const c = w.document.createElement("canvas"); c.width = 640; c.height = 480;
+  const x = c.getContext("2d");
+  let f = 0;
+  const draw = () => { f++; x.fillStyle = "hsl(" + (f * 6 % 360) + ",55%,50%)"; x.fillRect(0, 0, 640, 480);
+    x.fillStyle = "#fff"; x.fillRect((f * 5) % 580, 200, 60, 60); w.requestAnimationFrame(draw); };
+  draw();
+  // navigator.mediaDevices is a read-only getter — patch the METHOD on it (own-property
+  // shadow over the prototype), never reassign mediaDevices itself.
+  ensureMediaDevices(w).getUserMedia = async () => c.captureStream(30);
+}
+function ensureMediaDevices(w) {
+  if (!w.navigator.mediaDevices) {
+    Object.defineProperty(w.navigator, "mediaDevices", { configurable: true, value: {} });
+  }
+  return w.navigator.mediaDevices;
+}
+function denyCamera(w, err) {
+  ensureMediaDevices(w).getUserMedia = async () => { throw new (w.DOMException || DOMException)(err || "denied", "NotAllowedError"); };
+}
+
+async function run() {
+  const iframe = $("app");
+  const w = await waitForHarness(iframe.contentWindow);
+  const cam = w.boot.editor.cameraAPI, ed = w.boot.editor;
+
+  // 1) open with a fake camera → overlay shown, live preview renders through the chain, one track
+  installFakeCamera(w);
+  await cam.open();
+  await sleep(500);
+  let s = cam.state();
+  const overlayShown = !w.document.getElementById("camera").hidden;
+  addRow("Camera opens: live preview renders + stream active", s.open && overlayShown && s.tracks === 1 && s.previewW > 0,
+    `open:${s.open} overlay:${overlayShown} tracks:${s.tracks} preview:${s.previewW}px`);
+
+  // 2) a look picked in the camera applies (live loop reads RECIPE)
+  const pill = [...w.document.querySelectorAll("#cam-looks .cam-look")].find((b) => b.dataset.look === "sorrenti");
+  if (pill) pill.click();
+  await sleep(120);
+  const camLookOk = ed.getRecipe().look === "sorrenti" && pill && pill.getAttribute("aria-current") === "true";
+  addRow("Look applies in camera (recipe + pill state)", camLookOk,
+    `recipe.look=${ed.getRecipe().look} · pill aria-current=${pill && pill.getAttribute("aria-current")}`);
+
+  // 3) shutter → frame lands in the editor with the look applied (recipe continuity), overlay closed
+  cam.capture();
+  await sleep(250);
+  s = cam.state();
+  const captured = ed.hasContent && ed.getRecipe().look === "sorrenti" && !s.open && w.document.getElementById("camera").hidden;
+  addRow("Shutter lands frame in editor (recipe continuity)", captured,
+    `hasContent:${ed.hasContent} look:${ed.getRecipe().look} camOpen:${s.open}`);
+
+  // 4) capture released every track (no leaked camera light)
+  addRow("Capture releases the camera (no leaked tracks)", s.tracks === 0, `tracks after capture: ${s.tracks}`);
+
+  // 5) flip toggles facing, acquires a new stream, and does NOT hang on play()
+  installFakeCamera(w);
+  await cam.open();
+  await sleep(250);
+  const before = cam.state().facing;
+  const t0 = performance.now();
+  await cam.flip();
+  const flipMs = Math.round(performance.now() - t0);
+  const sf = cam.state();
+  addRow("Flip toggles facing without hanging", sf.facing !== before && sf.tracks === 1 && flipMs < 2000,
+    `${before} → ${sf.facing} · tracks:${sf.tracks} · flip resolved in ${flipMs}ms`);
+  cam.close();
+  const afterClose = cam.state();
+  addRow("Close releases the camera (no leaked tracks)", afterClose.tracks === 0 && w.document.getElementById("camera").hidden,
+    `tracks:${afterClose.tracks} overlayHidden:${w.document.getElementById("camera").hidden}`);
+
+  // 6) permission denied → in-app error, upload fallback, and no track left running
+  denyCamera(w, "Permission denied");
+  await cam.open();
+  await sleep(150);
+  const sd = cam.state();
+  const errShown = !w.document.getElementById("cam-error").hidden;
+  const fallback = !!w.document.getElementById("cam-error-upload").textContent;
+  addRow("Denied → in-app error + upload fallback, no leaked track", errShown && fallback && sd.tracks === 0,
+    `errorShown:${errShown} fallback:"${w.document.getElementById("cam-error-upload").textContent}" tracks:${sd.tracks}`);
+  cam.close();
+
+  // 7) CLOSE DURING A PENDING getUserMedia must not leak the resolved stream (gen guard).
+  {
+    let resolveGum; const madeTracks = [];
+    ensureMediaDevices(w).getUserMedia = () => new Promise((res) => {
+      resolveGum = () => {
+        const c = w.document.createElement("canvas"); c.width = 320; c.height = 240; c.getContext("2d").fillRect(0, 0, 320, 240);
+        const st = c.captureStream(30); madeTracks.push(...st.getTracks()); res(st);
+      };
+    });
+    const openP = cam.open();          // do NOT await — gum stays pending
+    await sleep(30);
+    cam.close();                       // close while gum is still in flight
+    if (resolveGum) resolveGum();      // NOW the camera resolves — the guard must drop + stop it
+    await openP.catch(() => {});
+    await sleep(60);
+    const leaked = madeTracks.some((t) => t.readyState === "live");
+    addRow("Close during pending getUserMedia leaks no stream", !leaked && cam.state().tracks === 0,
+      `resolved-after-close still live: ${leaked} · cam.tracks: ${cam.state().tracks}`);
+    cam.close();
+  }
+
+  const allPass = rows.every((r) => r.ok);
+  $("banner").dataset.state = allPass ? "pass" : "fail";
+  $("banner").textContent = allPass ? `PASS — all ${rows.length} checks` : "FAIL — see rows";
+  window.__m2_gate = { allPass, results: rows };
+  console.log("[m2-selftest]", allPass ? "PASS" : "FAIL", JSON.stringify(rows));
+}
+
+window.addEventListener("load", () => {
+  run().catch((e) => {
+    console.error("[m2-selftest] error:", e);
+    $("banner").dataset.state = "fail";
+    $("banner").textContent = "FAIL — " + (e && e.message || e);
+    window.__m2_gate = { allPass: false, error: String(e && e.message || e) };
+  });
+});
+</script>
+</body>
+</html>

@@ -228,6 +228,36 @@
   .sib-links a { color: var(--muted); text-decoration: none; border-bottom: 1px solid transparent; padding: 2px 0; }
   .sib-links a:hover, .sib-links a:focus-visible { color: var(--ink); border-bottom-color: #ffffff40; outline: none; }
   .sib-links .sep { opacity: .5; }
+  /* ---- M2 camera surface: full-viewport overlay ---- */
+  .camera { position: fixed; inset: 0; z-index: 80; background: #000;
+    display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  .camera[hidden] { display: none; }
+  #cam-video { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }  /* frame source only */
+  #cam-view { max-width: 100%; max-height: 100%; width: auto; height: auto; display: block; }
+  /* Look row — a thumb-reachable scroller above the controls. */
+  .cam-looks { position: absolute; left: 0; right: 0; bottom: calc(96px + env(safe-area-inset-bottom));
+    display: flex; gap: 8px; overflow-x: auto; padding: 8px 12px;
+    scrollbar-width: none; -ms-overflow-style: none;
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 16px, #000 calc(100% - 16px), transparent); }
+  .cam-looks::-webkit-scrollbar { display: none; }
+  .cam-look { flex: 0 0 auto; appearance: none; cursor: pointer; white-space: nowrap;
+    border: 1px solid #ffffff2e; background: #00000059; color: #fff; border-radius: 999px;
+    padding: 8px 14px; min-height: 40px; font: inherit; font-size: 13px; backdrop-filter: blur(4px); }
+  .cam-look[aria-current="true"] { border-color: var(--accent); color: var(--accent); background: #000000a6; }
+  /* Controls row — ✕ · shutter · flip. */
+  .cam-bar { position: absolute; left: 0; right: 0; bottom: calc(20px + env(safe-area-inset-bottom));
+    display: flex; align-items: center; justify-content: space-around; padding: 0 24px; }
+  .cam-bar .icon-btn { width: 52px; height: 52px; font-size: 20px; background: #ffffff1f; border-color: #ffffff33; color: #fff; }
+  .cam-shutter { appearance: none; cursor: pointer; width: 74px; height: 74px; border-radius: 50%;
+    background: transparent; border: 4px solid #fff; padding: 0; display: grid; place-items: center; }
+  .cam-shutter span { display: block; width: 58px; height: 58px; border-radius: 50%; background: #fff; transition: transform .08s; }
+  .cam-shutter:active span { transform: scale(.86); }
+  /* Denied / no-device state — in-app, offers the upload fallback (no re-prompt loop). */
+  .cam-error { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 16px; text-align: center; padding: 24px;
+    background: #000000e6; color: var(--ink); }
+  .cam-error[hidden] { display: none; }
+  .cam-error p { margin: 0; max-width: 340px; color: var(--muted); }
   .btn.primary { border-color: var(--accent); color: var(--accent); background: #d8c08a12; }
   .btn.primary:hover { background: #d8c08a20; }
 
@@ -398,6 +428,7 @@
         <p id="hero-sub"></p>
         <div class="row">
           <button class="btn primary" id="hero-open" type="button"></button>
+          <button class="btn" id="hero-camera" type="button" hidden></button>
         </div>
         <div class="gallery-label" id="sample-label"></div>
         <div class="samples" id="hero-samples" role="list" aria-label="Sample photos"></div>
@@ -433,9 +464,30 @@
        bar. Holds the secondary actions so the bar stays a two-button reach zone. -->
   <div class="overflow-menu" id="overflow-menu" role="menu" aria-labelledby="menu-btn" hidden>
     <button class="menu-item" id="open-image" role="menuitem" type="button"></button>
+    <button class="menu-item" id="cam-open" role="menuitem" type="button" hidden></button>
+    <button class="menu-item" id="export-jpeg" role="menuitem" type="button" hidden></button>
     <button class="menu-item" id="save-preset" role="menuitem" type="button" hidden></button>
     <button class="menu-item" id="import-recipe" role="menuitem" type="button"></button>
     <button class="menu-item" id="help" role="menuitem" type="button"></button>
+  </div>
+
+  <!-- M2 camera (selfie): full-viewport overlay. The live feed is pulled from a hidden
+       <video> and rendered THROUGH the WebGL2 chain to #cam-view, so you frame the shot
+       with the look already applied. getUserMedia only (MediaStream, no network, no CSP
+       impact); tracks stopped the moment it closes. -->
+  <div class="camera" id="camera" role="dialog" aria-modal="true" aria-label="Camera" hidden>
+    <video id="cam-video" playsinline muted autoplay aria-hidden="true"></video>
+    <canvas id="cam-view" aria-label="camera preview"></canvas>
+    <nav class="cam-looks" id="cam-looks" aria-label="looks"></nav>
+    <div class="cam-bar">
+      <button class="icon-btn" id="cam-close" type="button" aria-label="Close camera">✕</button>
+      <button class="cam-shutter" id="cam-shutter" type="button" aria-label="Take photo"><span></span></button>
+      <button class="icon-btn" id="cam-flip" type="button" aria-label="Flip camera">⟲</button>
+    </div>
+    <div class="cam-error" id="cam-error" hidden>
+      <p id="cam-error-msg"></p>
+      <button class="btn primary" id="cam-error-upload" type="button"></button>
+    </div>
   </div>
 
   <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp" class="visually-hidden" aria-hidden="true" tabindex="-1">
@@ -485,6 +537,10 @@ const LANG = {
     heroSub: "Your image never leaves this device — the whole edit runs in your browser. PNG, JPEG, or WebP.",
     heroOpen: "Open image",
     heroSample: "Try a sample",
+    // M2 camera
+    camUse: "Use camera",
+    camDenied: "Camera unavailable. Muse never uploads — the camera runs on your device — but your browser or settings blocked access. You can open a photo instead.",
+    camToUpload: "Open a photo instead",
     sampleLabel: "— or try one of these —",
     sampleCredit: "Sample photos: CC0 (public domain) · StockSnap",
     sibLabel: "More from NakliTechie:",
@@ -512,6 +568,7 @@ const LANG = {
     miOpen: "Open image…",
     miSave: "Save preset…",
     miImport: "Import recipe…",
+    miExportJpeg: "Export as JPEG",
     miHelp: "Help & shortcuts",
     helpTitle: "Keyboard & privacy",
     privacyLine: "Your photos never leave your device — there is no upload. You can verify it: open your browser's Network tab and watch it stay silent while you edit and export.",
@@ -553,6 +610,7 @@ const LANG = {
     ctl: {
       slope: "Slope", offset: "Offset (lift)", power: "Power (gamma)", sat: "Saturation",
       temp: "Warmth", contrast: "Contrast",
+      tone: "Tone (duotone)", toneLo: "Tone — shadow", toneHi: "Tone — highlight",
       radius: "Radius", edge: "Edge bias", blend: "Blend", amount: "Amount",
       strength: "Strength", softness: "Softness", vignette: "Vignette",
       threshold: "Threshold", spread: "Spread", tint: "Tint", size: "Size",
@@ -948,10 +1006,13 @@ void main() {
   if (u_contrast != 0.0) { c = clamp((c - 0.5) * (1.0 + u_contrast * 0.6) + 0.5, 0.0, 1.0); }   // contrast about mid-grey
   // Duotone toning — split-tone / sepia / silver for the pre-colour eras. Maps the
   // (possibly desaturated) luminance onto a shadow→highlight tint ramp, blended by
-  // amount. amt 0 leaves colour untouched, so every existing look is unchanged.
-  float lt = dot(c, vec3(0.2126, 0.7152, 0.0722));
-  vec3 duo = mix(u_toneLo, u_toneHi, lt);
-  c = clamp(mix(c, duo, u_toneAmt), 0.0, 1.0);
+  // amount. Guarded on exact 0.0 (like temp/contrast) so every amt==0 look is
+  // byte-identical on any GPU, not just where mix(c,duo,0) happens to be bit-exact.
+  if (u_toneAmt != 0.0) {
+    float lt = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    vec3 duo = mix(u_toneLo, u_toneHi, lt);
+    c = clamp(mix(c, duo, u_toneAmt), 0.0, 1.0);
+  }
   o = vec4(c, src.a);
 }`;
 
@@ -1686,13 +1747,59 @@ function readRecipePNG(png) {
   return null;
 }
 
+/* JPEG recipe transport — the same "muse\0<json>" payload in a COM (0xFFFE) segment
+   (§6, no EXIF lib). The COM is spliced in right after SOI; readers walk the marker
+   list. Recipe JSON is ASCII, so Latin-1 bytes round-trip exactly, as with PNG tEXt. */
+function embedRecipeJPEG(jpeg, recipeStr) {
+  if (jpeg.length < 2 || jpeg[0] !== 0xff || jpeg[1] !== 0xd8) return jpeg;   // not a JPEG — leave as-is
+  const payload = latin1Bytes(RECIPE_KEYWORD + "\0" + recipeStr);
+  const segLen = payload.length + 2;                    // COM length field counts its own 2 bytes
+  if (segLen > 0xffff) return jpeg;                      // COM caps at ~65533 B; recipes are tiny
+  const seg = new Uint8Array(4 + payload.length);
+  seg[0] = 0xff; seg[1] = 0xfe; seg[2] = (segLen >> 8) & 0xff; seg[3] = segLen & 0xff;
+  seg.set(payload, 4);
+  // Insert AFTER the first APPn segment when present (JFIF wants APP0 right after SOI),
+  // else right after SOI. Canvas-encoded JPEGs always start SOI · APP0.
+  let at = 2;
+  if (jpeg[2] === 0xff && jpeg[3] >= 0xe0 && jpeg[3] <= 0xef) {
+    const alen = (jpeg[4] << 8) | jpeg[5];
+    if (alen >= 2 && 4 + alen <= jpeg.length) at = 4 + alen;
+  }
+  const out = new Uint8Array(jpeg.length + seg.length);
+  out.set(jpeg.subarray(0, at), 0);
+  out.set(seg, at);                                     // COM after APP0 (or after SOI as a fallback)
+  out.set(jpeg.subarray(at), at + seg.length);
+  return out;
+}
+function readRecipeJPEG(jpeg) {
+  if (jpeg.length < 2 || jpeg[0] !== 0xff || jpeg[1] !== 0xd8) return null;
+  let p = 2;
+  while (p + 4 <= jpeg.length) {
+    if (jpeg[p] !== 0xff) { p++; continue; }             // resync to the next marker
+    const marker = jpeg[p + 1];
+    if (marker === 0xff) { p++; continue; }              // 0xFF fill byte before a real marker
+    if (marker === 0xd9 || marker === 0xda) break;       // EOI, or SOS → entropy data follows
+    if (marker === 0x00 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { p += 2; continue; }   // standalone / stuffed (no length)
+    const len = (jpeg[p + 2] << 8) | jpeg[p + 3];        // segment length incl. these 2 bytes
+    if (len < 2) break;
+    if (marker === 0xfe) {                               // COM
+      const data = jpeg.subarray(p + 4, p + 2 + len);
+      const z = data.indexOf(0);
+      if (z >= 0 && latin1Str(data.subarray(0, z)) === RECIPE_KEYWORD) return latin1Str(data.subarray(z + 1));
+    }
+    p += 2 + len;
+  }
+  return null;
+}
+
 // Save a blob via the File System Access API, falling back to <a download>.
 async function saveBlob(blob, name) {
   if (window.showSaveFilePicker) {
     try {
+      const ext = "." + (name.split(".").pop() || "png");
       const h = await window.showSaveFilePicker({
         suggestedName: name,
-        types: [{ description: "PNG image", accept: { "image/png": [".png"] } }],
+        types: [{ description: "Image", accept: { [blob.type || "image/png"]: [ext] } }],
       });
       const w = await h.createWritable();
       await w.write(blob); await w.close();
@@ -1724,6 +1831,10 @@ const PANEL = [
     { prop: "sat",    key: "sat", min: 0, max: 2, step: 0.01 },
     { prop: "temp",   key: "temp",     min: -1, max: 1, step: 0.01 },
     { prop: "contrast", key: "contrast", min: -1, max: 1, step: 0.01 },
+    // Duotone toning (E1): amt 0 = off (colour untouched); >0 maps luma onto a shadow→highlight ramp.
+    { prop: "tone.amt", key: "tone",   min: 0, max: 1, step: 0.01 },
+    { prop: "tone.lo",  rgb: true, key: "toneLo", min: 0, max: 1, step: 0.01 },
+    { prop: "tone.hi",  rgb: true, key: "toneHi", min: 0, max: 1, step: 0.01 },
   ] },
   { pass: "defocus", controls: [
     { prop: "radius", key: "radius", min: 0, max: 5, step: 0.05 },
@@ -1880,6 +1991,7 @@ function boot() {
     hasContent = true;
     hero.classList.add("hidden");
     $("export").hidden = false;
+    $("export-jpeg").hidden = false;
     $("save-preset").hidden = false;
     $("adjust").hidden = false;
   }
@@ -1898,10 +2010,12 @@ function boot() {
   async function loadFile(file) {
     if (!file) return;
     if (!/^image\/(png|jpeg|webp)$/i.test(file.type)) { toast(t("toastUnreadable"), "err"); return; }
-    // Sniff an embedded Muse recipe (PNG tEXt) before we throw the bytes away.
+    // Sniff an embedded Muse recipe (PNG tEXt / JPEG COM) before we throw the bytes away.
     let recipeStr = null;
     if (/png/i.test(file.type)) {
       try { recipeStr = readRecipePNG(new Uint8Array(await file.arrayBuffer())); } catch (_) {}
+    } else if (/jpeg/i.test(file.type)) {
+      try { recipeStr = readRecipeJPEG(new Uint8Array(await file.arrayBuffer())); } catch (_) {}
     }
     let bmp;
     try {
@@ -1939,20 +2053,27 @@ function boot() {
 
   // Export the composited frame with its recipe embedded (§6). FSA primary,
   // <a download> fallback. via omitted here (a UI export, not an agent one).
-  async function exportImage() {
+  async function exportImage(format) {
     if (!hasContent) return;
+    const fmt = format === "jpeg" ? "jpeg" : "png";
+    const mime = fmt === "jpeg" ? "image/jpeg" : "image/png";
     try {
-      const blob = await new Promise((res) => view.toBlob(res, "image/png"));
+      const blob = await new Promise((res) => view.toBlob(res, mime, fmt === "jpeg" ? 0.92 : undefined));
       if (!blob) throw new Error("toBlob returned null");
-      const withRecipe = embedRecipePNG(new Uint8Array(await blob.arrayBuffer()), serialiseRecipe(RECIPE));
-      const result = await saveBlob(new Blob([withRecipe], { type: "image/png" }), `muse-${RECIPE.look}.png`);
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      const withRecipe = fmt === "jpeg"
+        ? embedRecipeJPEG(bytes, serialiseRecipe(RECIPE))
+        : embedRecipePNG(bytes, serialiseRecipe(RECIPE));
+      const ext = fmt === "jpeg" ? "jpg" : "png";
+      const result = await saveBlob(new Blob([withRecipe], { type: mime }), `muse-${RECIPE.look}.${ext}`);
       if (result === "cancelled") toast(t("exportCancelled"));
       else toast(t("exportDone"));
     } catch (e) {
       console.error("[muse] export failed:", e); toast(t("exportFail"), "err");
     }
   }
-  $("export").addEventListener("click", exportImage);
+  $("export").addEventListener("click", () => exportImage("png"));
+  $("export-jpeg").addEventListener("click", () => exportImage("jpeg"));
 
   // File picker + drag/drop. Window-level dragover/drop preventDefault stops the
   // browser from navigating away when a photo lands outside the stage.
@@ -2127,8 +2248,14 @@ function boot() {
   const passNames = t("passNames"), ctlNames = t("ctl"), rgbSub = t("rgbSub");
   const panelSync = [];
   const fmtVal = (v, step) => Number(v).toFixed(step >= 1 ? 0 : step >= 0.1 ? 1 : step >= 0.01 ? 2 : 3);
-  const getP = (pass, prop, idx) => { const v = RECIPE.params[pass][prop]; return idx == null ? v : v[idx]; };
-  const setP = (pass, prop, idx, val) => { if (idx == null) RECIPE.params[pass][prop] = val; else RECIPE.params[pass][prop][idx] = val; };
+  // Resolve a control prop to [container, key]; a dotted prop ("tone.amt") steps into a
+  // nested param object so the duotone Tone controls reuse the same range/rgb machinery.
+  const resolveP = (pass, prop) => {
+    if (prop.indexOf(".") < 0) return [RECIPE.params[pass], prop];
+    const [a, b] = prop.split("."); return [RECIPE.params[pass][a], b];
+  };
+  const getP = (pass, prop, idx) => { const [c, k] = resolveP(pass, prop); const v = c[k]; return idx == null ? v : v[idx]; };
+  const setP = (pass, prop, idx, val) => { const [c, k] = resolveP(pass, prop); if (idx == null) c[k] = val; else c[k][idx] = val; };
 
   function buildPanel() {
     drawerBody.textContent = ""; panelSync.length = 0;
@@ -2275,17 +2402,138 @@ function boot() {
   function setRecipe(obj) { thumbGen++; RECIPE = deserialiseRecipe(obj); syncLookStrip(); syncPanel(); if (hasContent) draw(); }
   function getRecipe() { return JSON.parse(serialiseRecipe(RECIPE)); }
 
+  /* ---- M2: Camera (selfie). The live feed is pulled from a hidden <video> and rendered
+     THROUGH the WebGL2 chain to #cam-view, so the look is applied while you frame the shot.
+     getUserMedia only (a MediaStream — no network, no CSP surface); tracks are .stop()ed on
+     every close, capture, flip, and tab-hide, so the camera light never leaks. The one
+     indirection `gum()` is the single point the m2 self-test monkeypatches (a canvas
+     captureStream fake camera) so the whole path is headless-verifiable. ---- */
+  const camVideo = $("cam-video");
+  const camFrame = document.createElement("canvas");   // offscreen: video → capped preview res
+  const cam = { open: false, facing: "user", stream: null, raf: 0 };
+  let camGen = 0;   // bumped on every close/capture/restart — invalidates an in-flight getUserMedia
+  const gum = (c) => navigator.mediaDevices.getUserMedia(c);       // single patch point
+  const hasGUM = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  function stopStream() {
+    if (cam.stream) { cam.stream.getTracks().forEach((t) => t.stop()); cam.stream = null; }
+  }
+  async function startStream() {
+    stopStream();
+    const gen = ++camGen;
+    const stream = await gum({ video: { facingMode: cam.facing }, audio: false });
+    // Superseded by a close/capture/flip while gum() was pending? Stop the stream we just
+    // got and bail — otherwise a live track outlives the surface (leaked camera light).
+    if (gen !== camGen || !cam.open) { stream.getTracks().forEach((t) => t.stop()); return; }
+    cam.stream = stream;
+    camVideo.srcObject = stream;
+    camVideo.play().catch(() => {});   // fire-and-forget: play() can stay pending when the tab
+                                       // is backgrounded / autoplay is deferred; the render loop
+                                       // only needs videoWidth, so never block open/flip on it.
+  }
+  function camLoop() {
+    cancelAnimationFrame(cam.raf);
+    const step = () => {
+      if (!cam.open) return;
+      if (camVideo.videoWidth) {
+        const CAP = 720, vw = camVideo.videoWidth, vh = camVideo.videoHeight;
+        const s = Math.min(1, CAP / Math.max(vw, vh));
+        const pw = Math.max(1, Math.round(vw * s)), ph = Math.max(1, Math.round(vh * s));
+        if (camFrame.width !== pw || camFrame.height !== ph) { camFrame.width = pw; camFrame.height = ph; }
+        const cx = camFrame.getContext("2d");
+        if (cam.facing === "user") { cx.setTransform(-1, 0, 0, 1, pw, 0); }   // mirror the selfie
+        else cx.setTransform(1, 0, 0, 1, 0, 0);
+        cx.drawImage(camVideo, 0, 0, pw, ph);
+        engine.render(camFrame);                    // upload the frame + run the chain
+        compositeTrim(canvas, $("cam-view"));        // same trim as the editor → WYSIWYG
+      }
+      cam.raf = requestAnimationFrame(step);
+    };
+    cam.raf = requestAnimationFrame(step);
+  }
+  async function openCamera() {
+    $("cam-error").hidden = true; $("camera").hidden = false; cam.open = true;
+    buildCamLooks();
+    if (!hasGUM()) { showCamError(); return; }
+    try { await startStream(); }
+    catch (e) { console.error("[muse] camera denied:", e); showCamError(); return; }
+    camLoop();
+  }
+  function closeCamera() {
+    cam.open = false; camGen++;         // invalidate any in-flight gum() so it can't reopen a stream
+    cancelAnimationFrame(cam.raf); cam.raf = 0;
+    stopStream();
+    camVideo.srcObject = null;
+    $("camera").hidden = true;
+    sourceDirty = true;                    // GPU srcTex holds a camera frame → force a real re-upload
+    if (hasContent) draw();
+  }
+  function captureCamera() {
+    if (!camVideo.videoWidth) return;
+    const full = document.createElement("canvas");
+    full.width = camVideo.videoWidth; full.height = camVideo.videoHeight;
+    const cx = full.getContext("2d");
+    if (cam.facing === "user") cx.setTransform(-1, 0, 0, 1, full.width, 0);   // capture matches the mirrored preview
+    cx.drawImage(camVideo, 0, 0, full.width, full.height);
+    cam.open = false; camGen++; cancelAnimationFrame(cam.raf); cam.raf = 0;
+    stopStream(); camVideo.srcObject = null; $("camera").hidden = true;
+    setSource(full);                       // lands in the editor with the current look applied (recipe continuity)
+  }
+  async function flipCamera() {
+    const prev = cam.facing;
+    cam.facing = cam.facing === "user" ? "environment" : "user";
+    try { await startStream(); }
+    catch (e) { cam.facing = prev; console.error("[muse] camera flip failed:", e); showCamError(); }
+  }
+  function showCamError() {                // denied / no device → in-app notice, no re-prompt loop
+    stopStream();
+    $("cam-error-msg").textContent = t("camDenied");
+    $("cam-error").hidden = false;
+  }
+  function buildCamLooks() {
+    const host = $("cam-looks"); host.textContent = "";
+    const names = t("lookNames");
+    for (const l of LOOKS) {
+      const b = document.createElement("button");
+      b.className = "cam-look"; b.type = "button"; b.dataset.look = l.id;
+      b.textContent = names[l.id] || l.name;
+      if (l.id === RECIPE.look) b.setAttribute("aria-current", "true");
+      b.addEventListener("click", () => {   // live loop re-renders RECIPE → preview updates instantly
+        thumbGen++; RECIPE = makeRecipe(l.id); syncLookStrip(); syncPanel(); syncCamLooks();
+      });
+      host.appendChild(b);
+    }
+  }
+  function syncCamLooks() {
+    for (const b of $("cam-looks").children) {
+      if (b.dataset.look === RECIPE.look) b.setAttribute("aria-current", "true");
+      else b.removeAttribute("aria-current");
+    }
+  }
+  $("hero-camera").addEventListener("click", openCamera);
+  $("cam-open").addEventListener("click", openCamera);
+  $("cam-close").addEventListener("click", closeCamera);
+  $("cam-shutter").addEventListener("click", captureCamera);
+  $("cam-flip").addEventListener("click", flipCamera);
+  $("cam-error-upload").addEventListener("click", () => { closeCamera(); pick(); });
+  document.addEventListener("visibilitychange", () => { if (document.hidden && cam.open) closeCamera(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && cam.open) { e.stopPropagation(); closeCamera(); } }, true);
+  if (hasGUM()) { $("hero-camera").hidden = false; $("cam-open").hidden = false; }
+
   // Static strings (all through the lang map — §13)
   $("open-image").textContent = t("miOpen");
   $("export").textContent = t("exportBtn");
   $("save-preset").textContent = t("miSave");
   $("import-recipe").textContent = t("miImport");
+  $("export-jpeg").textContent = t("miExportJpeg");
   $("menu-btn").setAttribute("aria-label", t("more"));
   $("menu-btn").setAttribute("title", t("more"));
   // On touch devices there's no "drop" — use "Open" as the verb (G-M5).
   $("hero-title").textContent = matchMedia("(pointer: coarse)").matches ? t("heroTitleTouch") : t("heroTitle");
   $("hero-sub").textContent = t("heroSub");
   $("hero-open").textContent = t("heroOpen");
+  $("hero-camera").textContent = t("camUse");
+  $("cam-open").textContent = t("camUse");
+  $("cam-error-upload").textContent = t("camToUpload");
   $("sample-label").textContent = t("sampleLabel");
   $("sample-credit").textContent = t("sampleCredit");
   $("sib-label").textContent = t("sibLabel");
@@ -2464,8 +2712,11 @@ function boot() {
     if (!hasContent) throw new Error("muse.export: no image loaded");
     const rec = Object.assign(getRecipe(), { via: "agent" });
     if ((opts.format || "png") === "png") return renderToPNG(rec);
-    // JPEG path: COM-marker embed is deferred (§12); return the frame without a recipe.
-    return await new Promise((res) => view.toBlob(res, "image/jpeg", 0.92));
+    // JPEG path: embed the recipe in a COM marker (E2), same artifact guarantee as PNG.
+    const blob = await new Promise((res) => view.toBlob(res, "image/jpeg", 0.92));
+    if (!blob) throw new Error("toBlob returned null");
+    const withRecipe = embedRecipeJPEG(new Uint8Array(await blob.arrayBuffer()), serialiseRecipe(rec));
+    return new Blob([withRecipe], { type: "image/jpeg" });
   }
   function installAgentFace() {
     window.muse = { getLooks, applyLook, getRecipe: () => getRecipe(), setRecipe: (j) => setRecipe(j), export: agentExport };
@@ -2483,6 +2734,29 @@ function boot() {
   boot.editor = { loadFile, loadSample, setSource, setLook, setRecipe, getRecipe, draw,
                   toast, revealEditor, get hasContent() { return hasContent; },
                   markDirty: () => { sourceDirty = true; }, chainCount, view,
+                  // Camera hooks for the M2 self-test — same code the UI drives; the test
+                  // patches navigator.mediaDevices.getUserMedia (canvas captureStream) first.
+                  cameraAPI: {
+                    open: openCamera, capture: captureCamera, close: closeCamera, flip: flipCamera,
+                    state: () => ({ open: cam.open, facing: cam.facing,
+                      tracks: cam.stream ? cam.stream.getTracks().length : 0,
+                      errorShown: !$("cam-error").hidden, previewW: $("cam-view").width }),
+                    // Synchronous preview-cost probe for m2-perf: times the exact per-frame
+                    // work (chain render + trim composite) against a synthetic 640×480 frame,
+                    // independent of rAF/tab-visibility. compositeTrim's drawImage of the GL
+                    // canvas forces the frame to complete, so each sample includes GPU time.
+                    perfProbe: (frames) => {
+                      const test = document.createElement("canvas"); test.width = 640; test.height = 480;
+                      const tx = test.getContext("2d");
+                      tx.fillStyle = "#5a7a99"; tx.fillRect(0, 0, 640, 480);
+                      tx.fillStyle = "#e8d0b0"; tx.beginPath(); tx.arc(320, 240, 96, 0, 7); tx.fill();
+                      const camView = $("cam-view"), ds = [];
+                      for (let i = 0; i < 5; i++) { engine.render(test); compositeTrim(canvas, camView); }   // warm up
+                      for (let i = 0; i < frames; i++) { const t = performance.now(); engine.render(test); compositeTrim(canvas, camView); ds.push(performance.now() - t); }
+                      sourceDirty = true; if (hasContent) draw();   // restore the editor's real source
+                      return ds;
+                    },
+                  },
                   // Preset hooks for the M1 self-test (same code the UI drives).
                   presetAPI: {
                     save(name) { presets.push({ name, recipe: getRecipe() }); savePresets(); buildLookStrip(); syncLookStrip(); refreshThumbs(); return presets.length; },
