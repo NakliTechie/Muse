@@ -1792,6 +1792,123 @@ function readRecipeJPEG(jpeg) {
   return null;
 }
 
+/* =========================================================================
+ * v2.0 — Reference-Match (BYOK vision). The subject photo NEVER leaves the
+ * device; only the user-chosen REFERENCE is sent, opt-in, to the user's own
+ * vision-LLM key. The model reads the reference's film-look and proposes an
+ * editable recipe; nothing is auto-applied. visionMatch() is the single
+ * network seam — the m3 self-test mocks it, so the flow is key-free testable.
+ * ========================================================================= */
+
+// Build the recipe-schema description from the live PANEL so the prompt can
+// never drift from the actual params/ranges.
+function recipeSchemaText() {
+  return PANEL.map((g) => {
+    const parts = g.controls.map((c) => {
+      if (c.kind === "select") return `${c.prop} (one of ${c.options.map((o) => `"${o}"`).join("/")})`;
+      if (c.kind === "toggle") return `${c.prop}(bool)`;
+      const rng = `${c.min}..${c.max}`;
+      return c.rgb ? `${c.prop}[r,g,b] each ${rng}` : `${c.prop} ${rng}`;
+    });
+    return `- ${g.pass}: bypass(bool), ${parts.join(", ")}`;
+  }).join("\n");
+}
+
+function referencePrompt() {
+  return `You are a film-look colorist analysing a REFERENCE photo for the Muse photo tool. Muse renders a look as a JSON "recipe" over a fixed 8-pass shader chain. Read the reference's photographic LOOK — colour cast/temperature, contrast and tonal curve, saturation, film grain (amount + size), vignette/flash falloff, halation/bloom around highlights, soft-focus/defocus, chromatic aberration, and any duotone/split-tone — and return ONLY a JSON recipe that makes an ordinary photo resemble this reference's look (not its content).
+
+Recipe shape: {"look":"custom","seed":1,"params":{<pass>:{...}}}. Passes + params (stay within ranges; omit a pass to leave it at default/identity):
+${recipeSchemaText()}
+
+Notes:
+- curve is ASC-CDL: slope(gain), offset(lift), power(gamma) are per-channel [r,g,b]; sat 0..2 (1=unchanged); temp -1..1 (warm/cool); contrast -1..1; tone is duotone {lo:[r,g,b],hi:[r,g,b],amt 0..1}, amt>0 ONLY for toned monochrome.
+- grain.amount ~0.03 subtle … 0.15 heavy; flash.vignette darkens edges; halation.strength blooms highlights.
+- Set a pass's "bypass":false whenever you use it. Keep values realistic — subtle film emulation, not a heavy filter.
+Return ONLY the JSON object — no prose, no markdown fence.`;
+}
+
+// Provider adapters. Each builds the request + extracts the model's raw text.
+const PROVIDERS = {
+  anthropic: {
+    label: "Anthropic (Claude)", model: "claude-sonnet-5",
+    endpoint: "https://api.anthropic.com/v1/messages",
+    build(imgDataURI, prompt, key, model) {
+      const [meta, b64] = imgDataURI.split(",");
+      const mediaType = (meta.match(/data:(image\/[\w+.-]+)/) || [])[1] || "image/jpeg";
+      return {
+        headers: { "content-type": "application/json", "x-api-key": key,
+          "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+        body: JSON.stringify({ model: model || this.model, max_tokens: 1024,
+          messages: [{ role: "user", content: [
+            { type: "image", source: { type: "base64", media_type: mediaType, data: b64 } },
+            { type: "text", text: prompt } ] }] }),
+      };
+    },
+    text(json) { return (json.content || []).map((c) => c.text || "").join(""); },
+  },
+  openai: {
+    label: "OpenAI (GPT-4o)", model: "gpt-4o",
+    endpoint: "https://api.openai.com/v1/chat/completions",
+    build(imgDataURI, prompt, key, model) {
+      return {
+        headers: { "content-type": "application/json", "authorization": "Bearer " + key },
+        body: JSON.stringify({ model: model || this.model, max_tokens: 1024,
+          response_format: { type: "json_object" },
+          messages: [{ role: "user", content: [
+            { type: "text", text: prompt },
+            { type: "image_url", image_url: { url: imgDataURI } } ] }] }),
+      };
+    },
+    text(json) { const ch = (json.choices || [])[0]; return (ch && ch.message && ch.message.content) || ""; },
+  },
+};
+
+// Pull the first JSON object out of model text (tolerate a ```json fence or stray prose).
+function parseRecipeText(text) {
+  if (!text) return null;
+  let s = String(text).trim();
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i); if (fence) s = fence[1].trim();
+  const a = s.indexOf("{"), b = s.lastIndexOf("}");
+  if (a < 0 || b <= a) return null;
+  try { return JSON.parse(s.slice(a, b + 1)); } catch (_) { return null; }
+}
+
+// Clamp a proposed recipe to the PANEL bounds — deserialiseRecipe fills/normalises shape
+// but does NOT range-check, and a model won't always obey the range hints in the prompt.
+function clampRecipe(rec) {
+  const num = (v, lo, hi) => Math.min(hi, Math.max(lo, Number.isFinite(+v) ? +v : lo));
+  for (const g of PANEL) {
+    const p = rec.params[g.pass]; if (!p) continue;
+    if (typeof p.bypass !== "boolean") p.bypass = false;
+    for (const c of g.controls) {
+      const dot = c.prop.indexOf(".");
+      const container = dot < 0 ? p : p[c.prop.slice(0, dot)];
+      const key = dot < 0 ? c.prop : c.prop.slice(dot + 1);
+      if (!container || container[key] == null) continue;
+      if (c.kind === "select") { if (!c.options.includes(container[key])) container[key] = c.options[0]; }
+      else if (c.kind === "toggle") container[key] = !!container[key];
+      else if (c.rgb) { const a = container[key]; if (Array.isArray(a)) for (let i = 0; i < 3; i++) a[i] = num(a[i], c.min, c.max); }
+      else container[key] = num(container[key], c.min, c.max);
+    }
+  }
+  rec.seed = (Math.max(0, Math.floor(Number(rec.seed) || 1))) >>> 0;
+  return rec;
+}
+
+// The single network seam (mock in m3-selftest). Returns a validated/clamped recipe
+// object or throws with a code the UI maps to an in-app message.
+async function visionMatch(imgDataURI, cfg) {
+  const prov = PROVIDERS[cfg && cfg.provider]; if (!prov) throw new Error("provider");
+  if (!cfg.key) throw new Error("no-key");
+  const req = prov.build(imgDataURI, referencePrompt(), cfg.key, cfg.model);
+  const r = await fetch(prov.endpoint, { method: "POST", headers: req.headers, body: req.body });
+  if (!r.ok) { const t = await r.text().catch(() => ""); throw new Error("http-" + r.status + (t ? ": " + t.slice(0, 160) : "")); }
+  const obj = parseRecipeText(prov.text(await r.json()));
+  if (!obj || !obj.params) throw new Error("bad-json");
+  const rec = clampRecipe(deserialiseRecipe(obj)); rec.via = "reference"; rec.provider = cfg.provider;
+  return rec;
+}
+
 // Save a blob via the File System Access API, falling back to <a download>.
 async function saveBlob(blob, name) {
   if (window.showSaveFilePicker) {
