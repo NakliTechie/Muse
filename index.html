@@ -2977,6 +2977,8 @@ function boot() {
 
   // i18n coverage hook for the M1 self-test: the live set of defined lang keys.
   window.__muse_i18n = { locale: LOCALE, keys: Object.keys(LANG[LOCALE] || LANG.en) };
+  // Reference-match internals for the m3 self-test (const bindings aren't on window).
+  window.__muse_ref = { PROVIDERS, clampRecipe };
 
   /* ---- Agent face (§8): window.muse, gated behind muse.dev, off by default.
      Same pipeline the UI drives — one mechanism, two doors — and the headless
