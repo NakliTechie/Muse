@@ -465,6 +465,7 @@
   <div class="overflow-menu" id="overflow-menu" role="menu" aria-labelledby="menu-btn" hidden>
     <button class="menu-item" id="open-image" role="menuitem" type="button"></button>
     <button class="menu-item" id="cam-open" role="menuitem" type="button" hidden></button>
+    <button class="menu-item" id="export-jpeg" role="menuitem" type="button" hidden></button>
     <button class="menu-item" id="save-preset" role="menuitem" type="button" hidden></button>
     <button class="menu-item" id="import-recipe" role="menuitem" type="button"></button>
     <button class="menu-item" id="help" role="menuitem" type="button"></button>
@@ -567,6 +568,7 @@ const LANG = {
     miOpen: "Open image…",
     miSave: "Save preset…",
     miImport: "Import recipe…",
+    miExportJpeg: "Export as JPEG",
     miHelp: "Help & shortcuts",
     helpTitle: "Keyboard & privacy",
     privacyLine: "Your photos never leave your device — there is no upload. You can verify it: open your browser's Network tab and watch it stay silent while you edit and export.",
@@ -1742,13 +1744,51 @@ function readRecipePNG(png) {
   return null;
 }
 
+/* JPEG recipe transport — the same "muse\0<json>" payload in a COM (0xFFFE) segment
+   (§6, no EXIF lib). The COM is spliced in right after SOI; readers walk the marker
+   list. Recipe JSON is ASCII, so Latin-1 bytes round-trip exactly, as with PNG tEXt. */
+function embedRecipeJPEG(jpeg, recipeStr) {
+  if (jpeg.length < 2 || jpeg[0] !== 0xff || jpeg[1] !== 0xd8) return jpeg;   // not a JPEG — leave as-is
+  const payload = latin1Bytes(RECIPE_KEYWORD + "\0" + recipeStr);
+  const segLen = payload.length + 2;                    // COM length field counts its own 2 bytes
+  if (segLen > 0xffff) return jpeg;                      // COM caps at ~65533 B; recipes are tiny
+  const seg = new Uint8Array(4 + payload.length);
+  seg[0] = 0xff; seg[1] = 0xfe; seg[2] = (segLen >> 8) & 0xff; seg[3] = segLen & 0xff;
+  seg.set(payload, 4);
+  const out = new Uint8Array(jpeg.length + seg.length);
+  out.set(jpeg.subarray(0, 2), 0);                      // SOI
+  out.set(seg, 2);                                      // COM immediately after SOI
+  out.set(jpeg.subarray(2), 2 + seg.length);
+  return out;
+}
+function readRecipeJPEG(jpeg) {
+  if (jpeg.length < 2 || jpeg[0] !== 0xff || jpeg[1] !== 0xd8) return null;
+  let p = 2;
+  while (p + 4 <= jpeg.length) {
+    if (jpeg[p] !== 0xff) { p++; continue; }             // resync to the next marker
+    const marker = jpeg[p + 1];
+    if (marker === 0xd9 || marker === 0xda) break;       // EOI, or SOS → entropy data follows
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { p += 2; continue; }   // standalone (no length)
+    const len = (jpeg[p + 2] << 8) | jpeg[p + 3];        // segment length incl. these 2 bytes
+    if (len < 2) break;
+    if (marker === 0xfe) {                               // COM
+      const data = jpeg.subarray(p + 4, p + 2 + len);
+      const z = data.indexOf(0);
+      if (z >= 0 && latin1Str(data.subarray(0, z)) === RECIPE_KEYWORD) return latin1Str(data.subarray(z + 1));
+    }
+    p += 2 + len;
+  }
+  return null;
+}
+
 // Save a blob via the File System Access API, falling back to <a download>.
 async function saveBlob(blob, name) {
   if (window.showSaveFilePicker) {
     try {
+      const ext = "." + (name.split(".").pop() || "png");
       const h = await window.showSaveFilePicker({
         suggestedName: name,
-        types: [{ description: "PNG image", accept: { "image/png": [".png"] } }],
+        types: [{ description: "Image", accept: { [blob.type || "image/png"]: [ext] } }],
       });
       const w = await h.createWritable();
       await w.write(blob); await w.close();
@@ -1940,6 +1980,7 @@ function boot() {
     hasContent = true;
     hero.classList.add("hidden");
     $("export").hidden = false;
+    $("export-jpeg").hidden = false;
     $("save-preset").hidden = false;
     $("adjust").hidden = false;
   }
@@ -1958,10 +1999,12 @@ function boot() {
   async function loadFile(file) {
     if (!file) return;
     if (!/^image\/(png|jpeg|webp)$/i.test(file.type)) { toast(t("toastUnreadable"), "err"); return; }
-    // Sniff an embedded Muse recipe (PNG tEXt) before we throw the bytes away.
+    // Sniff an embedded Muse recipe (PNG tEXt / JPEG COM) before we throw the bytes away.
     let recipeStr = null;
     if (/png/i.test(file.type)) {
       try { recipeStr = readRecipePNG(new Uint8Array(await file.arrayBuffer())); } catch (_) {}
+    } else if (/jpeg/i.test(file.type)) {
+      try { recipeStr = readRecipeJPEG(new Uint8Array(await file.arrayBuffer())); } catch (_) {}
     }
     let bmp;
     try {
@@ -1999,20 +2042,27 @@ function boot() {
 
   // Export the composited frame with its recipe embedded (§6). FSA primary,
   // <a download> fallback. via omitted here (a UI export, not an agent one).
-  async function exportImage() {
+  async function exportImage(format) {
     if (!hasContent) return;
+    const fmt = format === "jpeg" ? "jpeg" : "png";
+    const mime = fmt === "jpeg" ? "image/jpeg" : "image/png";
     try {
-      const blob = await new Promise((res) => view.toBlob(res, "image/png"));
+      const blob = await new Promise((res) => view.toBlob(res, mime, fmt === "jpeg" ? 0.92 : undefined));
       if (!blob) throw new Error("toBlob returned null");
-      const withRecipe = embedRecipePNG(new Uint8Array(await blob.arrayBuffer()), serialiseRecipe(RECIPE));
-      const result = await saveBlob(new Blob([withRecipe], { type: "image/png" }), `muse-${RECIPE.look}.png`);
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      const withRecipe = fmt === "jpeg"
+        ? embedRecipeJPEG(bytes, serialiseRecipe(RECIPE))
+        : embedRecipePNG(bytes, serialiseRecipe(RECIPE));
+      const ext = fmt === "jpeg" ? "jpg" : "png";
+      const result = await saveBlob(new Blob([withRecipe], { type: mime }), `muse-${RECIPE.look}.${ext}`);
       if (result === "cancelled") toast(t("exportCancelled"));
       else toast(t("exportDone"));
     } catch (e) {
       console.error("[muse] export failed:", e); toast(t("exportFail"), "err");
     }
   }
-  $("export").addEventListener("click", exportImage);
+  $("export").addEventListener("click", () => exportImage("png"));
+  $("export-jpeg").addEventListener("click", () => exportImage("jpeg"));
 
   // File picker + drag/drop. Window-level dragover/drop preventDefault stops the
   // browser from navigating away when a photo lands outside the stage.
@@ -2455,6 +2505,7 @@ function boot() {
   $("export").textContent = t("exportBtn");
   $("save-preset").textContent = t("miSave");
   $("import-recipe").textContent = t("miImport");
+  $("export-jpeg").textContent = t("miExportJpeg");
   $("menu-btn").setAttribute("aria-label", t("more"));
   $("menu-btn").setAttribute("title", t("more"));
   // On touch devices there's no "drop" — use "Open" as the verb (G-M5).
@@ -2642,8 +2693,10 @@ function boot() {
     if (!hasContent) throw new Error("muse.export: no image loaded");
     const rec = Object.assign(getRecipe(), { via: "agent" });
     if ((opts.format || "png") === "png") return renderToPNG(rec);
-    // JPEG path: COM-marker embed is deferred (§12); return the frame without a recipe.
-    return await new Promise((res) => view.toBlob(res, "image/jpeg", 0.92));
+    // JPEG path: embed the recipe in a COM marker (E2), same artifact guarantee as PNG.
+    const blob = await new Promise((res) => view.toBlob(res, "image/jpeg", 0.92));
+    const withRecipe = embedRecipeJPEG(new Uint8Array(await blob.arrayBuffer()), serialiseRecipe(rec));
+    return new Blob([withRecipe], { type: "image/jpeg" });
   }
   function installAgentFace() {
     window.muse = { getLooks, applyLook, getRecipe: () => getRecipe(), setRecipe: (j) => setRecipe(j), export: agentExport };
