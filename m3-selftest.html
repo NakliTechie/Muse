@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'">
+<meta name="version" content="0.2.0-v2">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230b0b0d'/%3E%3Ccircle cx='8' cy='8' r='4.5' fill='none' stroke='%23d8c08a' stroke-width='1.6'/%3E%3Ccircle cx='8' cy='8' r='1.6' fill='%23d8c08a'/%3E%3C/svg%3E">
+<title>Muse — M3 reference-match self-test</title>
+<style>
+  :root { --bg:#0b0b0d; --surface:#16161a; --ink:#ececf0; --accent:#d8c08a; --muted:#8a8a93; --danger:#e06a5a; --ok:#5ec08a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 16px; max-width: 780px; }
+  .banner { display: inline-block; font-weight: 600; padding: 10px 16px; border-radius: 9px; border: 1px solid; margin-bottom: 16px; }
+  .banner[data-state="run"]  { color: var(--muted);  border-color: #ffffff20; }
+  .banner[data-state="pass"] { color: var(--ok);     border-color: #5ec08a55; }
+  .banner[data-state="fail"] { color: var(--danger); border-color: #e06a5a66; }
+  table { border-collapse: collapse; width: 100%; max-width: 900px; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #ffffff12; vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  td.r { font-weight: 600; } td.r[data-ok="1"] { color: var(--ok); } td.r[data-ok="0"] { color: var(--danger); }
+  .note { color: var(--muted); font-size: 12px; }
+  code { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); }
+  iframe { position: absolute; width: 1024px; height: 768px; left: -3000px; top: 0; border: 0; }
+</style>
+</head>
+<body>
+  <h1>Muse — M3 reference-match self-test</h1>
+  <p class="sub">Drives the v2.0 reference-match through <code>boot.editor.matchAPI</code> with
+  <code>fetch</code> monkeypatched to a canned provider response — so the whole BYOK flow is
+  verifiable without a key or a network call: a proposal applies + stages, out-of-range params
+  are clamped, Discard reverts exactly, Keep commits, and the missing-key / malformed-response
+  paths fail in-app (no crash). Also unit-checks the prompt builder, parser, and provider
+  adapters. Machine gate — never self-report. Result in <code>window.__m3_gate</code>.
+  <b>Real-key match fidelity (does a matched recipe resemble the reference?) is a separate
+  owner sign-off — a blind spot here.</b></p>
+  <div class="banner" id="banner" data-state="run">Running…</div>
+  <table><thead><tr><th>Check</th><th>Result</th><th>Evidence</th></tr></thead><tbody id="tbody"></tbody></table>
+  <iframe id="app" src="index.html" title="app under test"></iframe>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const rows = [];
+function addRow(name, ok, evidence) {
+  rows.push({ name, ok, evidence });
+  const tr = document.createElement("tr");
+  const a = document.createElement("td"); a.textContent = name;
+  const b = document.createElement("td"); b.className = "r"; b.dataset.ok = ok ? "1" : "0"; b.textContent = ok ? "PASS" : "FAIL";
+  const c = document.createElement("td"); c.className = "note"; c.textContent = evidence;
+  tr.append(a, b, c); $("tbody").appendChild(tr);
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function waitForHarness(w) {
+  return new Promise((res, rej) => { let n = 0;
+    const iv = setInterval(() => {
+      if (w && w.boot && w.boot.editor && w.boot.editor.matchAPI && typeof w.visionMatch === "function") { clearInterval(iv); res(w); }
+      else if (++n > 100) { clearInterval(iv); rej(new Error("harness never came up")); }
+    }, 50);
+  });
+}
+// A tiny reference data-URI (content irrelevant — the model is mocked).
+function refURI(w) { const c = w.document.createElement("canvas"); c.width = 32; c.height = 24; c.getContext("2d").fillRect(0, 0, 32, 24); return c.toDataURL("image/jpeg", 0.8); }
+// Install a canned provider response; captures the last request for assertions.
+function mockFetch(w, recipeJSON) {
+  const cap = { calls: 0, url: null, opts: null };
+  w.fetch = async (url, opts) => { cap.calls++; cap.url = url; cap.opts = opts;
+    return { ok: true, json: async () => ({ content: [{ type: "text", text: recipeJSON }], choices: [{ message: { content: recipeJSON } }] }) }; };
+  return cap;
+}
+
+async function run() {
+  const w = await waitForHarness($("app").contentWindow);
+  const ed = w.boot.editor, M = ed.matchAPI;
+  ed.loadSample();
+
+  // Unit: prompt builder carries the live schema; parser + clamp behave.
+  {
+    const prompt = w.referencePrompt();
+    const schemaOk = ["curve","grain","flash","halation","trim"].every((p) => prompt.includes(p + ":")) && prompt.includes("ONLY the JSON");
+    const parseOk = !!w.parseRecipeText('```json\n{"look":"custom","params":{}}\n```') && w.parseRecipeText("no json") === null;
+    addRow("prompt carries the live schema + parser tolerant", schemaOk && parseOk, `schema:${schemaOk} parse:${parseOk}`);
+  }
+  // Unit: provider adapters build the right auth + carry the image.
+  {
+    const uri = refURI(w);
+    const an = w.__muse_ref.PROVIDERS.anthropic.build(uri, "P", "sk-ant", null);
+    const oa = w.__muse_ref.PROVIDERS.openai.build(uri, "P", "sk-oa", null);
+    const anOk = an.headers["x-api-key"] === "sk-ant" && an.headers["anthropic-dangerous-direct-browser-access"] === "true" && /"type":"image"/.test(an.body);
+    const oaOk = oa.headers["authorization"] === "Bearer sk-oa" && /"image_url"/.test(oa.body) && /json_object/.test(oa.body);
+    addRow("provider adapters: auth headers + image payload", anOk && oaOk, `anthropic:${anOk} openai:${oaOk}`);
+  }
+
+  // 1) match applies + stages a proposal; only the reference is sent
+  const proposal = '{"look":"custom","seed":4,"params":{"grain":{"bypass":false,"amount":0.12,"size":2},"curve":{"sat":0.7,"temp":0.25}}}';
+  ed.setLook("none"); const before = w.__muse_m0.serialiseRecipe(ed.getRecipe());
+  M.open(); M.setProvider("anthropic"); M.setKey("sk-test"); const uri = refURI(w); M.setRef(uri);
+  const cap = mockFetch(w, proposal);
+  await M.run(); await sleep(150);
+  const staged = M.state().reviewing && ed.getRecipe().look === "custom" && ed.getRecipe().via === "reference" && !M.state().open;
+  const sentRef = cap.calls === 1 && typeof cap.opts.body === "string" && cap.opts.body.includes(uri.split(",")[1].slice(0, 24));
+  addRow("Match applies + stages a proposal (only the reference sent)", staged && sentRef,
+    `reviewing:${M.state().reviewing} look:${ed.getRecipe().look} via:${ed.getRecipe().via} refSent:${sentRef}`);
+
+  // 2) Discard reverts to the exact pre-match recipe
+  M.discard(); await sleep(80);
+  const reverted = w.__muse_m0.serialiseRecipe(ed.getRecipe()) === before && !M.state().reviewing;
+  addRow("Discard reverts to the exact pre-match recipe", reverted, `reverted:${reverted} reviewing:${M.state().reviewing}`);
+
+  // 3) out-of-range proposal is clamped
+  ed.setLook("none");
+  M.open(); M.setKey("sk-test"); M.setRef(refURI(w));
+  mockFetch(w, '{"look":"custom","params":{"grain":{"bypass":false,"amount":0.9,"size":9},"curve":{"sat":5,"slope":[10,10,10]}}}');
+  await M.run(); await sleep(150);
+  const g = ed.getRecipe().params;
+  const clamped = g.grain.amount <= 0.4 && g.grain.size <= 5 && g.curve.sat <= 2 && g.curve.slope[0] <= 1.5;
+  addRow("Out-of-range proposal is clamped to schema bounds", clamped,
+    `grain:${g.grain.amount} size:${g.grain.size} sat:${g.curve.sat} slope:${g.curve.slope[0]}`);
+  M.keep(); await sleep(60);
+  addRow("Keep commits the proposal + exits review", !M.state().reviewing && ed.getRecipe().look === "custom",
+    `reviewing:${M.state().reviewing} look:${ed.getRecipe().look}`);
+
+  // 4) missing key → in-app error, no proposal applied
+  ed.setLook("sorrenti"); const keep1 = w.__muse_m0.serialiseRecipe(ed.getRecipe());
+  M.open(); M.setKey(""); M.setRef(refURI(w));
+  let threwNet = false; w.fetch = async () => { threwNet = true; return { ok: true, json: async () => ({}) }; };
+  await M.run(); await sleep(100);
+  const noKeyOk = !M.state().reviewing && !threwNet && w.__muse_m0.serialiseRecipe(ed.getRecipe()) === keep1;
+  const toast1 = [...w.document.querySelectorAll(".toast")].pop();
+  addRow("Missing key → in-app error, no network, recipe untouched", noKeyOk && !!toast1,
+    `reviewing:${M.state().reviewing} networkHit:${threwNet} toast:${toast1 ? toast1.textContent.slice(0,32) : "none"}`);
+  M.close();
+
+  // 5) malformed response → in-app error, no proposal
+  ed.setLook("sorrenti"); const keep2 = w.__muse_m0.serialiseRecipe(ed.getRecipe());
+  M.open(); M.setKey("sk-test"); M.setRef(refURI(w));
+  mockFetch(w, "sorry, I can't do that");
+  await M.run(); await sleep(120);
+  const badOk = !M.state().reviewing && w.__muse_m0.serialiseRecipe(ed.getRecipe()) === keep2;
+  const toast2 = [...w.document.querySelectorAll(".toast")].pop();
+  addRow("Malformed response → in-app error, recipe untouched", badOk && !!toast2,
+    `reviewing:${M.state().reviewing} recipeKept:${badOk}`);
+  M.close();
+
+  // 6) key persists (stored on a successful match, prefilled on reopen)
+  M.open();
+  const keyPrefilled = w.document.getElementById("match-key").value === "sk-test" && M.state().keyStored;
+  addRow("BYOK key persists across opens (localStorage)", keyPrefilled, `prefilled:${keyPrefilled}`);
+  M.close();
+
+  const allPass = rows.every((r) => r.ok);
+  $("banner").dataset.state = allPass ? "pass" : "fail";
+  $("banner").textContent = allPass ? `PASS — all ${rows.length} checks` : "FAIL — see rows";
+  window.__m3_gate = { allPass, results: rows };
+  console.log("[m3-selftest]", allPass ? "PASS" : "FAIL", JSON.stringify(rows));
+}
+window.addEventListener("load", () => {
+  run().catch((e) => {
+    console.error("[m3-selftest] error:", e);
+    $("banner").dataset.state = "fail";
+    $("banner").textContent = "FAIL — " + (e && e.message || e);
+    window.__m3_gate = { allPass: false, error: String(e && e.message || e) };
+  });
+});
+</script>
+</body>
+</html>

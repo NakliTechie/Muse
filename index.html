@@ -4,15 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!--
-  CSP: nothing leaves the device. img-src allows blob:/data: for loaded photos and
-  procedural fixtures. connect-src allows ONLY the GA collect endpoint (pageview-only,
-  no image bytes, no PII, no persisted client id) — image data never touches the network.
+  CSP: img-src allows blob:/data: for loaded photos and procedural fixtures. connect-src
+  allows the GA collect endpoint (pageview-only, no image bytes, no PII, no persisted
+  client id) PLUS the v2 reference-match vision providers (api.anthropic.com,
+  api.openai.com) — reached ONLY when the user runs a BYOK match, carrying ONLY the
+  user-chosen reference photo. The photo being EDITED never touches the network.
   frame-ancestors lives in _headers (Cloudflare Pages) — it is *ignored* in a <meta>
   CSP and logs a console error, so it stays header-only. file:// does not enforce any
   of this identically to https; the deployed HTTP header (_headers) is the source of truth.
 -->
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src https://www.google-analytics.com; object-src 'none'; base-uri 'self'; form-action 'none'">
+      content="default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src https://www.google-analytics.com https://api.anthropic.com https://api.openai.com; object-src 'none'; base-uri 'self'; form-action 'none'">
 <meta name="version" content="0.1.0-m1">
 <meta name="description" content="Muse — take pictures of yourself like a Davide Sorrenti muse. A single-file, on-device photo tool: 19 film looks across 150 years (daguerreotype to early digital), deep sliders, recipe-in-the-file export. Your photos never leave your device.">
 <meta property="og:title" content="Muse — 150 years of film looks, on-device">
@@ -258,6 +260,30 @@
     background: #000000e6; color: var(--ink); }
   .cam-error[hidden] { display: none; }
   .cam-error p { margin: 0; max-width: 340px; color: var(--muted); }
+  /* ---- v2.0 reference-match modal + review bar ---- */
+  .ref-drop { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+    min-height: 132px; padding: 16px; text-align: center; cursor: pointer;
+    border: 2px dashed #ffffff2e; border-radius: 12px; color: var(--muted); background: #ffffff05; }
+  .ref-drop.drag { border-color: var(--accent); background: #d8c08a12; }
+  #ref-thumb { max-width: 100%; max-height: 200px; border-radius: 8px; }
+  #ref-thumb:not([hidden]) + #ref-drop-label, .ref-drop.has-ref #ref-drop-label { color: var(--ink); }
+  .match-row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .match-row #match-provider { flex: 0 0 auto; }
+  .match-row #match-key { flex: 1 1 160px; min-width: 0; }
+  .match-privacy { font-size: 12px; color: var(--muted); margin: 10px 0 0; line-height: 1.4; }
+  .modal .actions .spacer { flex: 1 1 auto; }
+  .btn.ghost { border-color: transparent; background: transparent; color: var(--muted); }
+  .btn.ghost:hover { color: var(--ink); background: #ffffff0d; }
+  /* Review bar — pinned just above the action bar, thumb-reachable. */
+  .match-review { position: fixed; left: 0; right: 0; z-index: 55;
+    bottom: calc(64px + env(safe-area-inset-bottom));
+    display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+    background: #17140fee; border-top: 1px solid #ffffff1f; backdrop-filter: blur(6px);
+    overflow-x: auto; scrollbar-width: none; }
+  .match-review[hidden] { display: none; }
+  .match-review::-webkit-scrollbar { display: none; }
+  .match-review .btn { flex: 0 0 auto; min-height: 40px; }
+  .match-review-label { flex: 1 1 auto; text-align: center; font-size: 12px; color: var(--accent); white-space: nowrap; }
   .btn.primary { border-color: var(--accent); color: var(--accent); background: #d8c08a12; }
   .btn.primary:hover { background: #d8c08a20; }
 
@@ -288,12 +314,16 @@
   }
 
   /* In-app modal (confirm / help / intro) — replaces native alert/confirm/prompt. */
-  .modal-scrim {
+  .modal-scrim, .match-scrim {
     position: fixed; inset: 0; z-index: 70;
     display: grid; place-items: center;
     background: #000a; padding: 20px;
     animation: toast-in .15s ease-out;
   }
+  /* The match scrim is a PERSISTENT element (toggled via [hidden]); it deliberately does
+     NOT carry the .modal-scrim class, so modalOpen()/tests that detect a live modal by
+     querySelector(".modal-scrim") never mistake this hidden element for an open dialog. */
+  .match-scrim[hidden] { display: none; }
   .modal {
     background: var(--surface); color: var(--ink);
     border: 1px solid #ffffff1f; border-radius: var(--radius);
@@ -465,6 +495,7 @@
   <div class="overflow-menu" id="overflow-menu" role="menu" aria-labelledby="menu-btn" hidden>
     <button class="menu-item" id="open-image" role="menuitem" type="button"></button>
     <button class="menu-item" id="cam-open" role="menuitem" type="button" hidden></button>
+    <button class="menu-item" id="match-open" role="menuitem" type="button" hidden></button>
     <button class="menu-item" id="export-jpeg" role="menuitem" type="button" hidden></button>
     <button class="menu-item" id="save-preset" role="menuitem" type="button" hidden></button>
     <button class="menu-item" id="import-recipe" role="menuitem" type="button"></button>
@@ -488,6 +519,38 @@
       <p id="cam-error-msg"></p>
       <button class="btn primary" id="cam-error-upload" type="button"></button>
     </div>
+  </div>
+
+  <!-- v2.0 reference-match modal. Drop a reference + BYOK key → the model proposes a
+       recipe. The subject photo never enters this flow; only the reference is sent. -->
+  <div class="match-scrim" id="match-scrim" hidden>
+    <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="match-title">
+      <h2 id="match-title"></h2>
+      <label class="ref-drop" id="ref-drop">
+        <input type="file" id="ref-input" accept="image/png,image/jpeg,image/webp" class="visually-hidden">
+        <img id="ref-thumb" alt="" hidden>
+        <span id="ref-drop-label"></span>
+      </label>
+      <div class="match-row">
+        <select class="field" id="match-provider" aria-label="Vision provider"></select>
+        <input class="field" id="match-key" type="password" autocomplete="off" spellcheck="false" aria-label="API key">
+      </div>
+      <p class="match-privacy" id="match-privacy"></p>
+      <div class="actions">
+        <button class="btn ghost" id="match-clear-key" type="button"></button>
+        <span class="spacer"></span>
+        <button class="btn" id="match-cancel" type="button"></button>
+        <button class="btn primary" id="match-go" type="button" disabled></button>
+      </div>
+    </div>
+  </div>
+  <!-- Staged review bar — the proposal is applied live but revertible until Keep. -->
+  <div class="match-review" id="match-review" hidden>
+    <button class="btn" id="match-discard" type="button"></button>
+    <button class="btn" id="match-compare" type="button"></button>
+    <span class="match-review-label" id="match-review-label"></span>
+    <button class="btn" id="match-edit" type="button"></button>
+    <button class="btn primary" id="match-keep" type="button"></button>
   </div>
 
   <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp" class="visually-hidden" aria-hidden="true" tabindex="-1">
@@ -569,6 +632,27 @@ const LANG = {
     miSave: "Save preset…",
     miImport: "Import recipe…",
     miExportJpeg: "Export as JPEG",
+    // v2.0 reference-match
+    miMatch: "Match a reference…",
+    matchTitle: "Match a reference",
+    refDropLabel: "Drop a reference photo — or click to pick",
+    matchKeyPh: "API key (kept on this device)",
+    matchPrivacy: (p) => `Only your reference photo is sent — to ${p}, with your key — to read its look. The photo you're editing never leaves this device.`,
+    matchClearKey: "Clear key",
+    matchGo: "Match",
+    matchGoing: "Reading the look…",
+    matchNoRef: "Pick a reference photo first.",
+    matchNoKey: "Add your API key first.",
+    matchBadJson: "The model didn't return a usable recipe — try again.",
+    matchHttpErr: (d) => `Match failed — ${d}`,
+    matchApplied: "Match applied — keep it, edit it, or discard.",
+    matchReviewLabel: "Reference match",
+    matchDiscard: "Discard",
+    matchCompare: "Hold to compare",
+    matchEdit: "Edit",
+    matchKeep: "Keep",
+    matchKept: "Match kept.",
+    matchDiscarded: "Reverted.",
     miHelp: "Help & shortcuts",
     helpTitle: "Keyboard & privacy",
     privacyLine: "Your photos never leave your device — there is no upload. You can verify it: open your browser's Network tab and watch it stay silent while you edit and export.",
@@ -1792,6 +1876,123 @@ function readRecipeJPEG(jpeg) {
   return null;
 }
 
+/* =========================================================================
+ * v2.0 — Reference-Match (BYOK vision). The subject photo NEVER leaves the
+ * device; only the user-chosen REFERENCE is sent, opt-in, to the user's own
+ * vision-LLM key. The model reads the reference's film-look and proposes an
+ * editable recipe; nothing is auto-applied. visionMatch() is the single
+ * network seam — the m3 self-test mocks it, so the flow is key-free testable.
+ * ========================================================================= */
+
+// Build the recipe-schema description from the live PANEL so the prompt can
+// never drift from the actual params/ranges.
+function recipeSchemaText() {
+  return PANEL.map((g) => {
+    const parts = g.controls.map((c) => {
+      if (c.kind === "select") return `${c.prop} (one of ${c.options.map((o) => `"${o}"`).join("/")})`;
+      if (c.kind === "toggle") return `${c.prop}(bool)`;
+      const rng = `${c.min}..${c.max}`;
+      return c.rgb ? `${c.prop}[r,g,b] each ${rng}` : `${c.prop} ${rng}`;
+    });
+    return `- ${g.pass}: bypass(bool), ${parts.join(", ")}`;
+  }).join("\n");
+}
+
+function referencePrompt() {
+  return `You are a film-look colorist analysing a REFERENCE photo for the Muse photo tool. Muse renders a look as a JSON "recipe" over a fixed 8-pass shader chain. Read the reference's photographic LOOK — colour cast/temperature, contrast and tonal curve, saturation, film grain (amount + size), vignette/flash falloff, halation/bloom around highlights, soft-focus/defocus, chromatic aberration, and any duotone/split-tone — and return ONLY a JSON recipe that makes an ordinary photo resemble this reference's look (not its content).
+
+Recipe shape: {"look":"custom","seed":1,"params":{<pass>:{...}}}. Passes + params (stay within ranges; omit a pass to leave it at default/identity):
+${recipeSchemaText()}
+
+Notes:
+- curve is ASC-CDL: slope(gain), offset(lift), power(gamma) are per-channel [r,g,b]; sat 0..2 (1=unchanged); temp -1..1 (warm/cool); contrast -1..1; tone is duotone {lo:[r,g,b],hi:[r,g,b],amt 0..1}, amt>0 ONLY for toned monochrome.
+- grain.amount ~0.03 subtle … 0.15 heavy; flash.vignette darkens edges; halation.strength blooms highlights.
+- Set a pass's "bypass":false whenever you use it. Keep values realistic — subtle film emulation, not a heavy filter.
+Return ONLY the JSON object — no prose, no markdown fence.`;
+}
+
+// Provider adapters. Each builds the request + extracts the model's raw text.
+const PROVIDERS = {
+  anthropic: {
+    label: "Anthropic (Claude)", model: "claude-sonnet-5",
+    endpoint: "https://api.anthropic.com/v1/messages",
+    build(imgDataURI, prompt, key, model) {
+      const [meta, b64] = imgDataURI.split(",");
+      const mediaType = (meta.match(/data:(image\/[\w+.-]+)/) || [])[1] || "image/jpeg";
+      return {
+        headers: { "content-type": "application/json", "x-api-key": key,
+          "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+        body: JSON.stringify({ model: model || this.model, max_tokens: 1024,
+          messages: [{ role: "user", content: [
+            { type: "image", source: { type: "base64", media_type: mediaType, data: b64 } },
+            { type: "text", text: prompt } ] }] }),
+      };
+    },
+    text(json) { return (json.content || []).map((c) => c.text || "").join(""); },
+  },
+  openai: {
+    label: "OpenAI (GPT-4o)", model: "gpt-4o",
+    endpoint: "https://api.openai.com/v1/chat/completions",
+    build(imgDataURI, prompt, key, model) {
+      return {
+        headers: { "content-type": "application/json", "authorization": "Bearer " + key },
+        body: JSON.stringify({ model: model || this.model, max_tokens: 1024,
+          response_format: { type: "json_object" },
+          messages: [{ role: "user", content: [
+            { type: "text", text: prompt },
+            { type: "image_url", image_url: { url: imgDataURI } } ] }] }),
+      };
+    },
+    text(json) { const ch = (json.choices || [])[0]; return (ch && ch.message && ch.message.content) || ""; },
+  },
+};
+
+// Pull the first JSON object out of model text (tolerate a ```json fence or stray prose).
+function parseRecipeText(text) {
+  if (!text) return null;
+  let s = String(text).trim();
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i); if (fence) s = fence[1].trim();
+  const a = s.indexOf("{"), b = s.lastIndexOf("}");
+  if (a < 0 || b <= a) return null;
+  try { return JSON.parse(s.slice(a, b + 1)); } catch (_) { return null; }
+}
+
+// Clamp a proposed recipe to the PANEL bounds — deserialiseRecipe fills/normalises shape
+// but does NOT range-check, and a model won't always obey the range hints in the prompt.
+function clampRecipe(rec) {
+  const num = (v, lo, hi) => Math.min(hi, Math.max(lo, Number.isFinite(+v) ? +v : lo));
+  for (const g of PANEL) {
+    const p = rec.params[g.pass]; if (!p) continue;
+    if (typeof p.bypass !== "boolean") p.bypass = false;
+    for (const c of g.controls) {
+      const dot = c.prop.indexOf(".");
+      const container = dot < 0 ? p : p[c.prop.slice(0, dot)];
+      const key = dot < 0 ? c.prop : c.prop.slice(dot + 1);
+      if (!container || container[key] == null) continue;
+      if (c.kind === "select") { if (!c.options.includes(container[key])) container[key] = c.options[0]; }
+      else if (c.kind === "toggle") container[key] = !!container[key];
+      else if (c.rgb) { const a = container[key]; if (Array.isArray(a)) for (let i = 0; i < 3; i++) a[i] = num(a[i], c.min, c.max); }
+      else container[key] = num(container[key], c.min, c.max);
+    }
+  }
+  rec.seed = (Math.max(0, Math.floor(Number(rec.seed) || 1))) >>> 0;
+  return rec;
+}
+
+// The single network seam (mock in m3-selftest). Returns a validated/clamped recipe
+// object or throws with a code the UI maps to an in-app message.
+async function visionMatch(imgDataURI, cfg) {
+  const prov = PROVIDERS[cfg && cfg.provider]; if (!prov) throw new Error("provider");
+  if (!cfg.key) throw new Error("no-key");
+  const req = prov.build(imgDataURI, referencePrompt(), cfg.key, cfg.model);
+  const r = await fetch(prov.endpoint, { method: "POST", headers: req.headers, body: req.body });
+  if (!r.ok) { const t = await r.text().catch(() => ""); throw new Error("http-" + r.status + (t ? ": " + t.slice(0, 160) : "")); }
+  const obj = parseRecipeText(prov.text(await r.json()));
+  if (!obj || !obj.params) throw new Error("bad-json");
+  const rec = clampRecipe(deserialiseRecipe(obj)); rec.via = "reference"; rec.provider = cfg.provider;
+  return rec;
+}
+
 // Save a blob via the File System Access API, falling back to <a download>.
 async function saveBlob(blob, name) {
   if (window.showSaveFilePicker) {
@@ -1902,7 +2103,8 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, v); } catch (_) {} },
   del(k) { try { localStorage.removeItem(k); } catch (_) {} },
 };
-const STORE_KEYS = { presets: "muse.presets", lang: "muse.lang", intro: "muse.intro", dev: "muse.dev" };
+const STORE_KEYS = { presets: "muse.presets", lang: "muse.lang", intro: "muse.intro", dev: "muse.dev",
+  byokProvider: "muse.byok.provider", byokKey: "muse.byok.key" };
 
 /* Bundled CC0 sample photos (StockSnap, public-domain / CC0) — a "try before you
    upload" gallery. Embedded as data-URIs so the promise holds: one file, nothing
@@ -1992,6 +2194,7 @@ function boot() {
     hero.classList.add("hidden");
     $("export").hidden = false;
     $("export-jpeg").hidden = false;
+    $("match-open").hidden = false;
     $("save-preset").hidden = false;
     $("adjust").hidden = false;
   }
@@ -2519,12 +2722,111 @@ function boot() {
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && cam.open) { e.stopPropagation(); closeCamera(); } }, true);
   if (hasGUM()) { $("hero-camera").hidden = false; $("cam-open").hidden = false; }
 
+  /* ---- v2.0 Reference-Match (BYOK vision). Pick a reference + your key → visionMatch()
+     (top-level seam) proposes a recipe; it's applied to the subject as a STAGED preview
+     (revertible until Keep). Only the reference is sent; the subject never leaves. ---- */
+  let matchRef = null;          // downscaled reference as a data-URI
+  let matchReview = null;       // { prev } while a proposal is staged
+  const matchScrim = $("match-scrim"), matchGo = $("match-go");
+  function populateProviders() {
+    const sel = $("match-provider"); sel.textContent = "";
+    for (const id of Object.keys(PROVIDERS)) {
+      const o = document.createElement("option"); o.value = id; o.textContent = PROVIDERS[id].label; sel.appendChild(o);
+    }
+    sel.value = store.get(STORE_KEYS.byokProvider) || Object.keys(PROVIDERS)[0];
+    syncPrivacy();
+  }
+  function syncPrivacy() { $("match-privacy").textContent = t("matchPrivacy", PROVIDERS[$("match-provider").value].label); }
+  function syncMatchEnabled() { matchGo.disabled = !(matchRef && $("match-key").value.trim()); }
+  async function setReference(file) {
+    if (!file || !/^image\/(png|jpeg|webp)$/i.test(file.type)) { toast(t("toastUnreadable"), "err"); return; }
+    let bmp; try { bmp = await createImageBitmap(file); } catch (_) { toast(t("toastDecodeFail"), "err"); return; }
+    const cap = 768, s = Math.min(1, cap / Math.max(bmp.width, bmp.height));
+    const w = Math.max(1, Math.round(bmp.width * s)), h = Math.max(1, Math.round(bmp.height * s));
+    const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+    cv.getContext("2d").drawImage(bmp, 0, 0, w, h);
+    matchRef = cv.toDataURL("image/jpeg", 0.85);
+    const thumb = $("ref-thumb"); thumb.src = matchRef; thumb.hidden = false;
+    $("ref-drop").classList.add("has-ref"); syncMatchEnabled();
+  }
+  function openMatch() {
+    if (!hasContent) return;
+    matchRef = null; $("ref-thumb").hidden = true; $("ref-drop").classList.remove("has-ref");
+    populateProviders();
+    $("match-key").value = store.get(STORE_KEYS.byokKey) || "";
+    syncMatchEnabled();
+    matchScrim.hidden = false;
+    setTimeout(() => (matchRef ? matchGo : $("ref-drop")).focus && $("ref-drop").focus(), 0);
+  }
+  function closeMatch() { matchScrim.hidden = true; }
+  async function runMatch() {
+    const provider = $("match-provider").value, key = $("match-key").value.trim();
+    if (!matchRef) { toast(t("matchNoRef"), "err"); return; }
+    if (!key) { toast(t("matchNoKey"), "err"); return; }
+    store.set(STORE_KEYS.byokProvider, provider); store.set(STORE_KEYS.byokKey, key);   // remember (settings)
+    matchGo.disabled = true; const label = matchGo.textContent; matchGo.textContent = t("matchGoing");
+    try {
+      const proposal = await visionMatch(matchRef, { provider, key });
+      closeMatch();
+      enterReview(proposal);
+    } catch (e) {
+      console.error("[muse] match failed:", e);
+      const m = e && e.message || "";
+      toast(m === "no-key" ? t("matchNoKey") : m === "bad-json" ? t("matchBadJson") : t("matchHttpErr", m), "err");
+    } finally { matchGo.textContent = label; syncMatchEnabled(); }
+  }
+  // Staged review: apply the proposal live but keep it revertible until Keep.
+  function enterReview(proposal) {
+    matchReview = { prev: getRecipe() };
+    RECIPE = proposal; syncLookStrip(); syncPanel(); if (hasContent) draw();
+    $("match-review").hidden = false;
+    toast(t("matchApplied"));
+  }
+  function exitReview() { matchReview = null; $("match-review").hidden = true; }
+  function discardMatch() { if (!matchReview) return; setRecipe(matchReview.prev); exitReview(); toast(t("matchDiscarded")); }
+  function keepMatch() { exitReview(); toast(t("matchKept")); }        // proposal already live
+  function editMatch() { exitReview(); openDrawer(); }                 // keep proposal, jump to Adjust
+  // Wiring
+  $("match-open").addEventListener("click", openMatch);
+  $("match-cancel").addEventListener("click", closeMatch);
+  $("match-go").addEventListener("click", runMatch);
+  $("match-key").addEventListener("input", syncMatchEnabled);
+  $("match-provider").addEventListener("change", () => { syncPrivacy(); });
+  $("match-clear-key").addEventListener("click", () => { store.del(STORE_KEYS.byokKey); $("match-key").value = ""; syncMatchEnabled(); toast(t("matchClearKey")); });
+  $("ref-input").addEventListener("change", () => { const f = $("ref-input").files && $("ref-input").files[0]; $("ref-input").value = ""; setReference(f); });
+  const refDrop = $("ref-drop");
+  refDrop.addEventListener("dragover", (e) => { e.preventDefault(); refDrop.classList.add("drag"); });
+  refDrop.addEventListener("dragleave", () => refDrop.classList.remove("drag"));
+  refDrop.addEventListener("drop", (e) => { e.preventDefault(); refDrop.classList.remove("drag"); const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]; if (f) setReference(f); });
+  matchScrim.addEventListener("pointerdown", (e) => { if (e.target === matchScrim) closeMatch(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !matchScrim.hidden) { e.stopPropagation(); closeMatch(); } }, true);
+  $("match-discard").addEventListener("click", discardMatch);
+  $("match-keep").addEventListener("click", keepMatch);
+  $("match-edit").addEventListener("click", editMatch);
+  // Hold-to-compare: show the pre-match recipe while pressed.
+  const cmp = $("match-compare");
+  cmp.addEventListener("pointerdown", (e) => { e.preventDefault(); if (matchReview) { cmp._live = RECIPE; RECIPE = deserialiseRecipe(matchReview.prev); if (hasContent) draw(); } });
+  const cmpRelease = () => { if (matchReview && cmp._live) { RECIPE = cmp._live; cmp._live = null; if (hasContent) draw(); } };
+  cmp.addEventListener("pointerup", cmpRelease); cmp.addEventListener("pointerleave", cmpRelease); cmp.addEventListener("pointercancel", cmpRelease);
+
   // Static strings (all through the lang map — §13)
   $("open-image").textContent = t("miOpen");
   $("export").textContent = t("exportBtn");
   $("save-preset").textContent = t("miSave");
   $("import-recipe").textContent = t("miImport");
   $("export-jpeg").textContent = t("miExportJpeg");
+  $("match-open").textContent = t("miMatch");
+  $("match-title").textContent = t("matchTitle");
+  $("ref-drop-label").textContent = t("refDropLabel");
+  $("match-key").placeholder = t("matchKeyPh");
+  $("match-clear-key").textContent = t("matchClearKey");
+  $("match-cancel").textContent = t("cancel");
+  $("match-go").textContent = t("matchGo");
+  $("match-discard").textContent = t("matchDiscard");
+  $("match-compare").textContent = t("matchCompare");
+  $("match-review-label").textContent = t("matchReviewLabel");
+  $("match-edit").textContent = t("matchEdit");
+  $("match-keep").textContent = t("matchKeep");
   $("menu-btn").setAttribute("aria-label", t("more"));
   $("menu-btn").setAttribute("title", t("more"));
   // On touch devices there's no "drop" — use "Open" as the verb (G-M5).
@@ -2643,7 +2945,7 @@ function boot() {
      except Space (before/after) and the always-safe combos. ---- */
   const LOOK_KEYS = { "1": "sorrenti", "2": "corinne", "3": "disposable", "4": "mall", "0": "none" };
   const typingIn = (el) => el && (el.tagName === "INPUT" || el.tagName === "SELECT" || el.tagName === "TEXTAREA" || el.isContentEditable);
-  const modalOpen = () => !!document.querySelector(".modal-scrim");
+  const modalOpen = () => !!document.querySelector(".modal-scrim") || !$("match-scrim").hidden;
   document.addEventListener("keydown", (e) => {
     if ((e.metaKey || e.ctrlKey) && (e.key === "s" || e.key === "S")) { e.preventDefault(); if (hasContent) exportImage(); return; }
     if (typingIn(document.activeElement) || modalOpen()) return;   // Esc handled by drawer/modal owners
@@ -2675,6 +2977,8 @@ function boot() {
 
   // i18n coverage hook for the M1 self-test: the live set of defined lang keys.
   window.__muse_i18n = { locale: LOCALE, keys: Object.keys(LANG[LOCALE] || LANG.en) };
+  // Reference-match internals for the m3 self-test (const bindings aren't on window).
+  window.__muse_ref = { PROVIDERS, clampRecipe };
 
   /* ---- Agent face (§8): window.muse, gated behind muse.dev, off by default.
      Same pipeline the UI drives — one mechanism, two doors — and the headless
@@ -2756,6 +3060,17 @@ function boot() {
                       sourceDirty = true; if (hasContent) draw();   // restore the editor's real source
                       return ds;
                     },
+                  },
+                  // Reference-match hooks for the m3 self-test (same code the UI drives;
+                  // the test mocks window.fetch so visionMatch runs key-free).
+                  matchAPI: {
+                    open: openMatch, close: closeMatch, run: runMatch,
+                    setRef: (dataURI) => { matchRef = dataURI; $("ref-drop").classList.add("has-ref"); syncMatchEnabled(); },
+                    setProvider: (p) => { $("match-provider").value = p; syncPrivacy(); },
+                    setKey: (k) => { $("match-key").value = k; syncMatchEnabled(); },
+                    discard: discardMatch, keep: keepMatch, edit: editMatch,
+                    state: () => ({ open: !matchScrim.hidden, reviewing: !!matchReview, canMatch: !matchGo.disabled,
+                      keyStored: !!store.get(STORE_KEYS.byokKey) }),
                   },
                   // Preset hooks for the M1 self-test (same code the UI drives).
                   presetAPI: {
