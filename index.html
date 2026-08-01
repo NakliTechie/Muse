@@ -1006,10 +1006,13 @@ void main() {
   if (u_contrast != 0.0) { c = clamp((c - 0.5) * (1.0 + u_contrast * 0.6) + 0.5, 0.0, 1.0); }   // contrast about mid-grey
   // Duotone toning — split-tone / sepia / silver for the pre-colour eras. Maps the
   // (possibly desaturated) luminance onto a shadow→highlight tint ramp, blended by
-  // amount. amt 0 leaves colour untouched, so every existing look is unchanged.
-  float lt = dot(c, vec3(0.2126, 0.7152, 0.0722));
-  vec3 duo = mix(u_toneLo, u_toneHi, lt);
-  c = clamp(mix(c, duo, u_toneAmt), 0.0, 1.0);
+  // amount. Guarded on exact 0.0 (like temp/contrast) so every amt==0 look is
+  // byte-identical on any GPU, not just where mix(c,duo,0) happens to be bit-exact.
+  if (u_toneAmt != 0.0) {
+    float lt = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    vec3 duo = mix(u_toneLo, u_toneHi, lt);
+    c = clamp(mix(c, duo, u_toneAmt), 0.0, 1.0);
+  }
   o = vec4(c, src.a);
 }`;
 
@@ -1755,10 +1758,17 @@ function embedRecipeJPEG(jpeg, recipeStr) {
   const seg = new Uint8Array(4 + payload.length);
   seg[0] = 0xff; seg[1] = 0xfe; seg[2] = (segLen >> 8) & 0xff; seg[3] = segLen & 0xff;
   seg.set(payload, 4);
+  // Insert AFTER the first APPn segment when present (JFIF wants APP0 right after SOI),
+  // else right after SOI. Canvas-encoded JPEGs always start SOI · APP0.
+  let at = 2;
+  if (jpeg[2] === 0xff && jpeg[3] >= 0xe0 && jpeg[3] <= 0xef) {
+    const alen = (jpeg[4] << 8) | jpeg[5];
+    if (alen >= 2 && 4 + alen <= jpeg.length) at = 4 + alen;
+  }
   const out = new Uint8Array(jpeg.length + seg.length);
-  out.set(jpeg.subarray(0, 2), 0);                      // SOI
-  out.set(seg, 2);                                      // COM immediately after SOI
-  out.set(jpeg.subarray(2), 2 + seg.length);
+  out.set(jpeg.subarray(0, at), 0);
+  out.set(seg, at);                                     // COM after APP0 (or after SOI as a fallback)
+  out.set(jpeg.subarray(at), at + seg.length);
   return out;
 }
 function readRecipeJPEG(jpeg) {
@@ -1767,8 +1777,9 @@ function readRecipeJPEG(jpeg) {
   while (p + 4 <= jpeg.length) {
     if (jpeg[p] !== 0xff) { p++; continue; }             // resync to the next marker
     const marker = jpeg[p + 1];
+    if (marker === 0xff) { p++; continue; }              // 0xFF fill byte before a real marker
     if (marker === 0xd9 || marker === 0xda) break;       // EOI, or SOS → entropy data follows
-    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { p += 2; continue; }   // standalone (no length)
+    if (marker === 0x00 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { p += 2; continue; }   // standalone / stuffed (no length)
     const len = (jpeg[p + 2] << 8) | jpeg[p + 3];        // segment length incl. these 2 bytes
     if (len < 2) break;
     if (marker === 0xfe) {                               // COM
@@ -2400,6 +2411,7 @@ function boot() {
   const camVideo = $("cam-video");
   const camFrame = document.createElement("canvas");   // offscreen: video → capped preview res
   const cam = { open: false, facing: "user", stream: null, raf: 0 };
+  let camGen = 0;   // bumped on every close/capture/restart — invalidates an in-flight getUserMedia
   const gum = (c) => navigator.mediaDevices.getUserMedia(c);       // single patch point
   const hasGUM = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
   function stopStream() {
@@ -2407,8 +2419,13 @@ function boot() {
   }
   async function startStream() {
     stopStream();
-    cam.stream = await gum({ video: { facingMode: cam.facing }, audio: false });
-    camVideo.srcObject = cam.stream;
+    const gen = ++camGen;
+    const stream = await gum({ video: { facingMode: cam.facing }, audio: false });
+    // Superseded by a close/capture/flip while gum() was pending? Stop the stream we just
+    // got and bail — otherwise a live track outlives the surface (leaked camera light).
+    if (gen !== camGen || !cam.open) { stream.getTracks().forEach((t) => t.stop()); return; }
+    cam.stream = stream;
+    camVideo.srcObject = stream;
     camVideo.play().catch(() => {});   // fire-and-forget: play() can stay pending when the tab
                                        // is backgrounded / autoplay is deferred; the render loop
                                        // only needs videoWidth, so never block open/flip on it.
@@ -2442,7 +2459,7 @@ function boot() {
     camLoop();
   }
   function closeCamera() {
-    cam.open = false;
+    cam.open = false; camGen++;         // invalidate any in-flight gum() so it can't reopen a stream
     cancelAnimationFrame(cam.raf); cam.raf = 0;
     stopStream();
     camVideo.srcObject = null;
@@ -2457,13 +2474,15 @@ function boot() {
     const cx = full.getContext("2d");
     if (cam.facing === "user") cx.setTransform(-1, 0, 0, 1, full.width, 0);   // capture matches the mirrored preview
     cx.drawImage(camVideo, 0, 0, full.width, full.height);
-    cam.open = false; cancelAnimationFrame(cam.raf); cam.raf = 0;
+    cam.open = false; camGen++; cancelAnimationFrame(cam.raf); cam.raf = 0;
     stopStream(); camVideo.srcObject = null; $("camera").hidden = true;
     setSource(full);                       // lands in the editor with the current look applied (recipe continuity)
   }
   async function flipCamera() {
+    const prev = cam.facing;
     cam.facing = cam.facing === "user" ? "environment" : "user";
-    try { await startStream(); } catch (e) { console.error("[muse] camera flip failed:", e); showCamError(); }
+    try { await startStream(); }
+    catch (e) { cam.facing = prev; console.error("[muse] camera flip failed:", e); showCamError(); }
   }
   function showCamError() {                // denied / no device → in-app notice, no re-prompt loop
     stopStream();
@@ -2695,6 +2714,7 @@ function boot() {
     if ((opts.format || "png") === "png") return renderToPNG(rec);
     // JPEG path: embed the recipe in a COM marker (E2), same artifact guarantee as PNG.
     const blob = await new Promise((res) => view.toBlob(res, "image/jpeg", 0.92));
+    if (!blob) throw new Error("toBlob returned null");
     const withRecipe = embedRecipeJPEG(new Uint8Array(await blob.arrayBuffer()), serialiseRecipe(rec));
     return new Blob([withRecipe], { type: "image/jpeg" });
   }

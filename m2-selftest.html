@@ -152,6 +152,27 @@ async function run() {
     `errorShown:${errShown} fallback:"${w.document.getElementById("cam-error-upload").textContent}" tracks:${sd.tracks}`);
   cam.close();
 
+  // 7) CLOSE DURING A PENDING getUserMedia must not leak the resolved stream (gen guard).
+  {
+    let resolveGum; const madeTracks = [];
+    ensureMediaDevices(w).getUserMedia = () => new Promise((res) => {
+      resolveGum = () => {
+        const c = w.document.createElement("canvas"); c.width = 320; c.height = 240; c.getContext("2d").fillRect(0, 0, 320, 240);
+        const st = c.captureStream(30); madeTracks.push(...st.getTracks()); res(st);
+      };
+    });
+    const openP = cam.open();          // do NOT await — gum stays pending
+    await sleep(30);
+    cam.close();                       // close while gum is still in flight
+    if (resolveGum) resolveGum();      // NOW the camera resolves — the guard must drop + stop it
+    await openP.catch(() => {});
+    await sleep(60);
+    const leaked = madeTracks.some((t) => t.readyState === "live");
+    addRow("Close during pending getUserMedia leaks no stream", !leaked && cam.state().tracks === 0,
+      `resolved-after-close still live: ${leaked} · cam.tracks: ${cam.state().tracks}`);
+    cam.close();
+  }
+
   const allPass = rows.every((r) => r.ok);
   $("banner").dataset.state = allPass ? "pass" : "fail";
   $("banner").textContent = allPass ? `PASS — all ${rows.length} checks` : "FAIL — see rows";
