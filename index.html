@@ -2657,6 +2657,21 @@ function boot() {
                     state: () => ({ open: cam.open, facing: cam.facing,
                       tracks: cam.stream ? cam.stream.getTracks().length : 0,
                       errorShown: !$("cam-error").hidden, previewW: $("cam-view").width }),
+                    // Synchronous preview-cost probe for m2-perf: times the exact per-frame
+                    // work (chain render + trim composite) against a synthetic 640×480 frame,
+                    // independent of rAF/tab-visibility. compositeTrim's drawImage of the GL
+                    // canvas forces the frame to complete, so each sample includes GPU time.
+                    perfProbe: (frames) => {
+                      const test = document.createElement("canvas"); test.width = 640; test.height = 480;
+                      const tx = test.getContext("2d");
+                      tx.fillStyle = "#5a7a99"; tx.fillRect(0, 0, 640, 480);
+                      tx.fillStyle = "#e8d0b0"; tx.beginPath(); tx.arc(320, 240, 96, 0, 7); tx.fill();
+                      const camView = $("cam-view"), ds = [];
+                      for (let i = 0; i < 5; i++) { engine.render(test); compositeTrim(canvas, camView); }   // warm up
+                      for (let i = 0; i < frames; i++) { const t = performance.now(); engine.render(test); compositeTrim(canvas, camView); ds.push(performance.now() - t); }
+                      sourceDirty = true; if (hasContent) draw();   // restore the editor's real source
+                      return ds;
+                    },
                   },
                   // Preset hooks for the M1 self-test (same code the UI drives).
                   presetAPI: {

@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'">
+<meta name="version" content="0.1.0-m2">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230b0b0d'/%3E%3Ccircle cx='8' cy='8' r='4.5' fill='none' stroke='%23d8c08a' stroke-width='1.6'/%3E%3Ccircle cx='8' cy='8' r='1.6' fill='%23d8c08a'/%3E%3C/svg%3E">
+<title>Muse — M2 camera perf</title>
+<style>
+  :root { --bg:#0b0b0d; --ink:#ececf0; --accent:#d8c08a; --muted:#8a8a93; --danger:#e06a5a; --ok:#5ec08a; }
+  body { margin: 0; padding: 20px; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 16px; max-width: 760px; }
+  .banner { display: inline-block; font-weight: 600; padding: 10px 16px; border-radius: 9px; border: 1px solid; margin-bottom: 16px; }
+  .banner[data-state="run"]  { color: var(--muted);  border-color: #ffffff20; }
+  .banner[data-state="pass"] { color: var(--ok);     border-color: #5ec08a55; }
+  .banner[data-state="fail"] { color: var(--danger); border-color: #e06a5a66; }
+  table { border-collapse: collapse; } th, td { text-align: left; padding: 6px 18px 6px 0; }
+  th { color: var(--muted); font-weight: 500; }
+  code { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  iframe { position: absolute; width: 900px; height: 700px; left: -3000px; top: 0; border: 0; }
+</style>
+</head>
+<body>
+  <h1>Muse — M2 camera perf</h1>
+  <p class="sub">Runs the live camera preview (fake <code>captureStream</code> feed, rendered
+  through the full WebGL2 chain) for 300 frames and reports frame-time median / p95. This is a
+  <b>headless proxy on this machine</b> — the real gate number is a mid-tier phone on a real
+  camera (a flagged on-device blind spot). Gate here: median ≤ 42 ms (≥ 24 fps). Result in
+  <code>window.__m2_perf</code>.</p>
+  <div class="banner" id="banner" data-state="run">Running…</div>
+  <table id="out"></table>
+  <iframe id="app" src="index.html" title="app under test"></iframe>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function waitForHarness(w) {
+  return new Promise((res, rej) => {
+    let n = 0;
+    const iv = setInterval(() => {
+      if (w && w.boot && w.boot.editor && w.boot.editor.cameraAPI) { clearInterval(iv); res(w); }
+      else if (++n > 100) { clearInterval(iv); rej(new Error("harness never came up")); }
+    }, 50);
+  });
+}
+function stat(a, p) { const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(s.length * p))]; }
+
+async function run() {
+  const w = await waitForHarness($("app").contentWindow);
+  // Synchronous probe: times the real per-frame preview cost (chain render + trim composite),
+  // independent of requestAnimationFrame / tab visibility (rAF pauses when the tab is hidden).
+  const deltas = w.boot.editor.cameraAPI.perfProbe(300);
+
+  const median = stat(deltas, 0.5), p95 = stat(deltas, 0.95), max = Math.max(...deltas);
+  const fps = median >= 0.5 ? Math.round(1000 / median) : ">1000";   // sub-ms render → cap the label
+  const pass = median <= 42;   // ≥ ~24 fps
+  const rowsHtml = [
+    ["frames sampled", deltas.length],
+    ["median frame time", median.toFixed(1) + " ms  (~" + fps + " fps)"],
+    ["p95 frame time", p95.toFixed(1) + " ms"],
+    ["max frame time", max.toFixed(1) + " ms"],
+    ["gate (median ≤ 42 ms)", pass ? "PASS" : "FAIL"],
+  ].map(([k, v]) => "<tr><th>" + k + "</th><td><code>" + v + "</code></td></tr>").join("");
+  $("out").innerHTML = rowsHtml;
+  $("banner").dataset.state = pass ? "pass" : "fail";
+  $("banner").textContent = pass ? "PASS — median " + median.toFixed(1) + " ms (~" + fps + " fps)" : "FAIL — median " + median.toFixed(1) + " ms";
+  window.__m2_perf = { pass, median, p95, max, fps, frames: deltas.length };
+  console.log("[m2-perf]", JSON.stringify(window.__m2_perf));
+}
+window.addEventListener("load", () => {
+  run().catch((e) => {
+    console.error("[m2-perf] error:", e);
+    $("banner").dataset.state = "fail";
+    $("banner").textContent = "FAIL — " + (e && e.message || e);
+    window.__m2_perf = { pass: false, error: String(e && e.message || e) };
+  });
+});
+</script>
+</body>
+</html>
