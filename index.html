@@ -608,6 +608,7 @@ const LANG = {
     ctl: {
       slope: "Slope", offset: "Offset (lift)", power: "Power (gamma)", sat: "Saturation",
       temp: "Warmth", contrast: "Contrast",
+      tone: "Tone (duotone)", toneLo: "Tone — shadow", toneHi: "Tone — highlight",
       radius: "Radius", edge: "Edge bias", blend: "Blend", amount: "Amount",
       strength: "Strength", softness: "Softness", vignette: "Vignette",
       threshold: "Threshold", spread: "Spread", tint: "Tint", size: "Size",
@@ -1779,6 +1780,10 @@ const PANEL = [
     { prop: "sat",    key: "sat", min: 0, max: 2, step: 0.01 },
     { prop: "temp",   key: "temp",     min: -1, max: 1, step: 0.01 },
     { prop: "contrast", key: "contrast", min: -1, max: 1, step: 0.01 },
+    // Duotone toning (E1): amt 0 = off (colour untouched); >0 maps luma onto a shadow→highlight ramp.
+    { prop: "tone.amt", key: "tone",   min: 0, max: 1, step: 0.01 },
+    { prop: "tone.lo",  rgb: true, key: "toneLo", min: 0, max: 1, step: 0.01 },
+    { prop: "tone.hi",  rgb: true, key: "toneHi", min: 0, max: 1, step: 0.01 },
   ] },
   { pass: "defocus", controls: [
     { prop: "radius", key: "radius", min: 0, max: 5, step: 0.05 },
@@ -2182,8 +2187,14 @@ function boot() {
   const passNames = t("passNames"), ctlNames = t("ctl"), rgbSub = t("rgbSub");
   const panelSync = [];
   const fmtVal = (v, step) => Number(v).toFixed(step >= 1 ? 0 : step >= 0.1 ? 1 : step >= 0.01 ? 2 : 3);
-  const getP = (pass, prop, idx) => { const v = RECIPE.params[pass][prop]; return idx == null ? v : v[idx]; };
-  const setP = (pass, prop, idx, val) => { if (idx == null) RECIPE.params[pass][prop] = val; else RECIPE.params[pass][prop][idx] = val; };
+  // Resolve a control prop to [container, key]; a dotted prop ("tone.amt") steps into a
+  // nested param object so the duotone Tone controls reuse the same range/rgb machinery.
+  const resolveP = (pass, prop) => {
+    if (prop.indexOf(".") < 0) return [RECIPE.params[pass], prop];
+    const [a, b] = prop.split("."); return [RECIPE.params[pass][a], b];
+  };
+  const getP = (pass, prop, idx) => { const [c, k] = resolveP(pass, prop); const v = c[k]; return idx == null ? v : v[idx]; };
+  const setP = (pass, prop, idx, val) => { const [c, k] = resolveP(pass, prop); if (idx == null) c[k] = val; else c[k][idx] = val; };
 
   function buildPanel() {
     drawerBody.textContent = ""; panelSync.length = 0;

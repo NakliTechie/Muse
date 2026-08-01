@@ -213,6 +213,18 @@ async function run() {
     addRow("⋯ menu folds Open/Save/Import/Help; bar = Adjust+Export", ok,
       `bar:[${barIds.join(",")}] · menu:[${items.join(",")}] · appbarHelp:${appbarHelp}`);
   }
+  { // 12) E1: duotone Tone controls exposed in Advanced curve + tone round-trips through export
+    ed.loadSample();
+    const curveFs = w.document.querySelector('details.advanced fieldset.pass[data-pass="curve"]');
+    const labels = curveFs ? [...curveFs.querySelectorAll(".ctl .lab span:first-child")].map((s) => s.textContent) : [];
+    const hasTone = ["Tone (duotone)", "Tone — shadow", "Tone — highlight"].every((l) => labels.includes(l));
+    muse.setRecipe({ look: "none", seed: 3, params: { curve: { tone: { lo: [0.1, 0.05, 0.2], hi: [0.9, 0.85, 0.7], amt: 0.6 } } } });
+    const want = serial(w, muse.getRecipe());
+    const blob = await muse.export({ format: "png" });
+    const got = serial(w, JSON.parse(readRecipeFromPNG(new Uint8Array(await blob.arrayBuffer())) || "{}"));
+    addRow("Tone (duotone) controls present + tone round-trips", hasTone && got === want && muse.getRecipe().params.curve.tone.amt === 0.6,
+      `controls:${hasTone} · amt=${muse.getRecipe().params.curve.tone.amt} · roundtrip:${got === want}`);
+  }
 
   const allPass = rows.every((r) => r.ok);
   $("banner").dataset.state = allPass ? "pass" : "fail";
